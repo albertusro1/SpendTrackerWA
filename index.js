@@ -205,8 +205,9 @@ async function startWhatsAppBot() {
 
     sock = makeWASocket({
         auth: state,
+        printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: ["Finance Bot", "Chrome", "1.0.0"]
+        browser: ['Ubuntu', 'Chrome', '20.0.04']
     });
 
     sock.ev.on('creds.update', saveCreds);
