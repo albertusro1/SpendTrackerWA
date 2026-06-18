@@ -104,6 +104,11 @@ async function calculateSplitBill(msg, session, userName) {
     });
     
     let report = `🧾 *Split Bill Summary*\n\n`;
+    report += `*Items:*\n`;
+    session.items.forEach(item => {
+        report += `- ${item.name} (Rp ${item.price.toLocaleString('id-ID')}): ${item.owners.join(', ')}\n`;
+    });
+    report += `\n*Totals:*\n`;
     for (const [p, amt] of Object.entries(debts)) {
         if (amt > 0) report += `- ${p} owes ${userName}: Rp ${Math.round(amt).toLocaleString('id-ID')}\n`;
     }
