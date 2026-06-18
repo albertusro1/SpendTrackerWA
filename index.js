@@ -135,7 +135,7 @@ async function handleSplitBill(msg, userName) {
             
             await msg.reply("Reading receipt with AI... 🤖 Please wait a moment.");
             
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
             const prompt = "Extract all food and beverage line items from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
             
             const imageParts = [
