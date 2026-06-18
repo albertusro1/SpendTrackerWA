@@ -205,7 +205,6 @@ async function startWhatsAppBot() {
 
     sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true,
         logger: pino({ level: 'silent' }),
         browser: ["Finance Bot", "Chrome", "1.0.0"]
     });
@@ -213,11 +212,17 @@ async function startWhatsAppBot() {
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+        
+        if (qr) {
+            console.log('Scan the QR Code below to authenticate your DEDICATED bot account:');
+            require('qrcode-terminal').generate(qr, { small: true });
+        }
+        
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
-                startWhatsAppBot();
+                setTimeout(startWhatsAppBot, 3000); // 3 second delay to prevent infinite spin
             }
         } else if (connection === 'open') {
             console.log('WhatsApp Client is ready! Connected with Baileys 🚀');
