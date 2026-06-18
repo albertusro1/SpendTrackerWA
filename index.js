@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const QRCode = require('qrcode');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
@@ -202,8 +202,11 @@ async function startWhatsAppBot() {
     await initGoogleSheets();
 
     const { state, saveCreds } = await useMultiFileAuthState('/.wwebjs_auth');
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(`Using WA v${version.join('.')}, isLatest: ${isLatest}`);
 
     sock = makeWASocket({
+        version,
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
