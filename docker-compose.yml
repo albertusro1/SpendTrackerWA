@@ -11,6 +11,7 @@ services:
       - NODE_ENV=production
       - SPREADSHEET_ID=1oNNissufy-er_fN3MPsToI7J4DITeccOQ6J3clpXxko
       - ALLOWED_SENDER=6282114003078@c.us
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
     deploy:
       resources:
         limits:
