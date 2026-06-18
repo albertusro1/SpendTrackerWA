@@ -54,7 +54,7 @@ cat << 'EOF' > package.json
     "start": "node index.js"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.13.0",
+    "@google/generative-ai": "^0.24.1",
     "google-auth-library": "^9.11.0",
     "google-spreadsheet": "^4.1.4",
     "qrcode": "^1.5.3",
