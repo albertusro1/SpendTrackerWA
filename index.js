@@ -62,14 +62,15 @@ async function logUserExpense(userName, amount, description, category, customDat
 
 async function reply(msg, textOrMedia, options = {}) {
     try {
-        console.log("DEBUG REPLY: Sending to JID:", msg.key.remoteJid);
+        const jid = msg.key.remoteJid;
+        console.log("DEBUG REPLY: Sending to JID:", jid);
         let result;
         if (typeof textOrMedia === 'string') {
-            result = await sock.sendMessage(msg.key.remoteJid, { text: textOrMedia, ...options }, { quoted: msg });
+            result = await sock.sendMessage(jid, { text: textOrMedia, ...options });
         } else {
-            result = await sock.sendMessage(msg.key.remoteJid, { ...textOrMedia, ...options }, { quoted: msg });
+            result = await sock.sendMessage(jid, { ...textOrMedia, ...options });
         }
-        console.log("DEBUG REPLY: Message sent successfully!");
+        console.log("DEBUG REPLY: Message sent successfully! Result key:", JSON.stringify(result?.key));
         return result;
     } catch (err) {
         console.error("DEBUG REPLY ERROR:", err);
@@ -254,9 +255,11 @@ async function startWhatsAppBot() {
 
         console.log("\n======================================");
         console.log("DEBUG: INCOMING MESSAGE RECEIVED");
-        console.log("-> msg.from: '" + from + "'");
-        console.log("-> ADMIN_NUMBER loaded from .env: '" + ADMIN_NUMBER + "'");
-        console.log("-> Exact match? :", from === ADMIN_NUMBER);
+        console.log("-> msg.key:", JSON.stringify(msg.key));
+        console.log("-> from (converted):", from);
+        console.log("-> ADMIN_NUMBER:", ADMIN_NUMBER);
+        console.log("-> Exact match?:", from === ADMIN_NUMBER);
+        console.log("-> rawText:", rawText);
         console.log("======================================\n");
         
         try {
