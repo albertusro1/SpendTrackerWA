@@ -10,8 +10,9 @@
     "@google/generative-ai": "^0.24.1",
     "google-auth-library": "^9.11.0",
     "google-spreadsheet": "^4.1.4",
+    "pino": "^9.0.0",
     "qrcode": "^1.5.3",
     "qrcode-terminal": "^0.12.0",
-    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main"
+    "@whiskeysockets/baileys": "^6.7.0"
   }
 }
