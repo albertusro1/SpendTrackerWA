@@ -201,7 +201,7 @@ async function handleSplitBill(msg, userName, from, text) {
 async function startWhatsAppBot() {
     await initGoogleSheets();
 
-    const { state, saveCreds } = await useMultiFileAuthState('auth_session_baileys');
+    const { state, saveCreds } = await useMultiFileAuthState('/.wwebjs_auth');
 
     sock = makeWASocket({
         auth: state,
