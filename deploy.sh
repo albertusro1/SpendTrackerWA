@@ -400,7 +400,16 @@ client.on('message', async (msg) => {
 
             let amount = parseInt(match[1], 10);
             if (match[2] && ['k', 'rb', 'ribu'].includes(match[2].toLowerCase())) amount *= 1000;
-            const description = argsText.replace(match[0], '').trim() || 'No description';
+            let description = argsText.replace(match[0], '').trim() || 'No description';
+
+            let customDate = null;
+            const dateRegex = /\s+((?:yesterday|kemarin)|(?:\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)|(?:\d{1,2}\s+(?:jan|feb|mar|apr|may|mei|jun|jul|aug|agu|sep|oct|okt|nov|dec|des)[a-z]*\s*\d{0,4}))$/i;
+            const dateMatch = description.match(dateRegex);
+            if (dateMatch) {
+                // Keep the exact format the user typed
+                customDate = dateMatch[1];
+                description = description.replace(dateRegex, '').trim() || 'No description';
+            }
 
             const CATEGORIES = {
                 'Food & Beverage': ['makan', 'minum', 'kopi', 'nasi', 'gofood', 'grabfood', 'mcd'],
@@ -415,8 +424,8 @@ client.on('message', async (msg) => {
                 }
             }
 
-            await logUserExpense(userName, amount, description, category);
-            await msg.reply(`✅ Recorded!\nDesc: ${description}\nCat: ${category}\nAmt: Rp ${amount.toLocaleString('id-ID')}`);
+            await logUserExpense(userName, amount, description, category, customDate);
+            await msg.reply(`✅ Recorded!\nDesc: ${description}\nCat: ${category}\nAmt: Rp ${amount.toLocaleString('id-ID')}\nDate: ${customDate || 'Today'}`);
         }
         else if (command === '/summary') {
             const sheet = doc.sheetsByTitle[userName];
