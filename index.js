@@ -220,9 +220,11 @@ async function startWhatsAppBot() {
         }
         
         if (connection === 'close') {
+            console.error("Connection Closed!", lastDisconnect.error);
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) {
-                setTimeout(startWhatsAppBot, 3000); // 3 second delay to prevent infinite spin
+                console.log("Reconnecting in 5 seconds...");
+                setTimeout(startWhatsAppBot, 5000); 
             }
         } else if (connection === 'open') {
             console.log('WhatsApp Client is ready! Connected with Baileys 🚀');
