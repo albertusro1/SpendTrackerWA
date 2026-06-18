@@ -197,6 +197,13 @@ async function handleSplitBill(msg, userName) {
 }
 
 client.on('message', async (msg) => {
+    console.log("\n======================================");
+    console.log("DEBUG: INCOMING MESSAGE RECEIVED");
+    console.log("-> msg.from: '" + msg.from + "'");
+    console.log("-> ADMIN_NUMBER loaded from .env: '" + ADMIN_NUMBER + "'");
+    console.log("-> Exact match? :", msg.from === ADMIN_NUMBER);
+    console.log("======================================\n");
+    
     try {
         if (!doc) await initGoogleSheets();
         
