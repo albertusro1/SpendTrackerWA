@@ -61,10 +61,18 @@ async function logUserExpense(userName, amount, description, category, customDat
 }
 
 async function reply(msg, textOrMedia, options = {}) {
-    if (typeof textOrMedia === 'string') {
-        return await sock.sendMessage(msg.key.remoteJid, { text: textOrMedia, ...options }, { quoted: msg });
-    } else {
-        return await sock.sendMessage(msg.key.remoteJid, { ...textOrMedia, ...options }, { quoted: msg });
+    try {
+        console.log("DEBUG REPLY: Sending to JID:", msg.key.remoteJid);
+        let result;
+        if (typeof textOrMedia === 'string') {
+            result = await sock.sendMessage(msg.key.remoteJid, { text: textOrMedia, ...options }, { quoted: msg });
+        } else {
+            result = await sock.sendMessage(msg.key.remoteJid, { ...textOrMedia, ...options }, { quoted: msg });
+        }
+        console.log("DEBUG REPLY: Message sent successfully!");
+        return result;
+    } catch (err) {
+        console.error("DEBUG REPLY ERROR:", err);
     }
 }
 
