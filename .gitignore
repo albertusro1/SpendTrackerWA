@@ -1,0 +1,5 @@
+node_modules/
+auth_session/
+credentials.json
+spend-tracker-apis-2f1df66442d0.json
+.env

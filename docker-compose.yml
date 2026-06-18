@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  wa-finance-bot:
+    build: .
+    restart: always
+    shm_size: '1g'
+    volumes:
+      - ./auth_session:/.wwebjs_auth
+    environment:
+      - NODE_ENV=production
+      - SPREADSHEET_ID=1oNNissufy-er_fN3MPsToI7J4DITeccOQ6J3clpXxko
+      - ALLOWED_SENDER=6282114003078@c.us
+    deploy:
+      resources:
+        limits:
+          memory: 512M
