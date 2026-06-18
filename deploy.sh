@@ -138,7 +138,7 @@ const fs = require('fs');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-const ADMIN_NUMBER = process.env.ADMIN_NUMBER;
+const ADMIN_NUMBER = (process.env.ADMIN_NUMBER || '').trim();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const sessions = {};
