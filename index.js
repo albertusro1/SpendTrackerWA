@@ -255,6 +255,24 @@ async function startWhatsAppBot() {
         } else if (connection === 'open') {
             console.log('WhatsApp Client is ready! Connected with Baileys 🚀');
             console.log('Bot identity:', JSON.stringify(sock.user));
+            
+            // Auto-send a test message to admin on startup
+            setTimeout(async () => {
+                try {
+                    console.log("AUTO-TEST: Sending test message to 6282114003078@s.whatsapp.net...");
+                    const res = await sock.sendMessage('6282114003078@s.whatsapp.net', { text: '🤖 Bot is online and ready!' });
+                    console.log("AUTO-TEST Result:", JSON.stringify(res));
+                } catch(e) {
+                    console.error("AUTO-TEST ERROR:", e.message);
+                }
+            }, 3000);
+        }
+    });
+
+    // Track message delivery status
+    sock.ev.on('messages.update', (updates) => {
+        for (const update of updates) {
+            console.log("MSG STATUS UPDATE:", JSON.stringify(update));
         }
     });
 
