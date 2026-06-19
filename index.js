@@ -62,18 +62,31 @@ async function logUserExpense(userName, amount, description, category, customDat
 
 async function reply(msg, textOrMedia, options = {}) {
     try {
-        const jid = msg.key.senderPn || msg.key.remoteJid;
-        console.log("DEBUG REPLY: Sending to JID:", jid, "(senderPn:", msg.key.senderPn, ")");
+        // Try senderPn first, then remoteJid
+        const primaryJid = msg.key.senderPn || msg.key.remoteJid;
+        console.log("DEBUG REPLY: Trying JID:", primaryJid);
         let result;
         if (typeof textOrMedia === 'string') {
-            result = await sock.sendMessage(jid, { text: textOrMedia, ...options });
+            result = await sock.sendMessage(primaryJid, { text: textOrMedia, ...options });
         } else {
-            result = await sock.sendMessage(jid, { ...textOrMedia, ...options });
+            result = await sock.sendMessage(primaryJid, { ...textOrMedia, ...options });
         }
-        console.log("DEBUG REPLY: Message sent successfully!");
+        console.log("DEBUG REPLY: Result:", JSON.stringify(result));
         return result;
     } catch (err) {
-        console.error("DEBUG REPLY ERROR:", err);
+        console.error("DEBUG REPLY ERROR:", err.message || err);
+        // Fallback: try the other JID
+        try {
+            const fallbackJid = msg.key.remoteJid;
+            console.log("DEBUG REPLY FALLBACK: Trying:", fallbackJid);
+            if (typeof textOrMedia === 'string') {
+                return await sock.sendMessage(fallbackJid, { text: textOrMedia, ...options });
+            } else {
+                return await sock.sendMessage(fallbackJid, { ...textOrMedia, ...options });
+            }
+        } catch (err2) {
+            console.error("DEBUG REPLY FALLBACK ERROR:", err2.message || err2);
+        }
     }
 }
 
@@ -241,6 +254,7 @@ async function startWhatsAppBot() {
             }
         } else if (connection === 'open') {
             console.log('WhatsApp Client is ready! Connected with Baileys 🚀');
+            console.log('Bot identity:', JSON.stringify(sock.user));
         }
     });
 
