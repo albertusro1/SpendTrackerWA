@@ -62,31 +62,19 @@ async function logUserExpense(userName, amount, description, category, customDat
 
 async function reply(msg, textOrMedia, options = {}) {
     try {
-        // Try senderPn first, then remoteJid
-        const primaryJid = msg.key.senderPn || msg.key.remoteJid;
-        console.log("DEBUG REPLY: Trying JID:", primaryJid);
+        // Error 463 means we MUST send to @lid JID, not @s.whatsapp.net
+        const jid = msg.key.remoteJid;
+        console.log("DEBUG REPLY: Sending to JID:", jid);
         let result;
         if (typeof textOrMedia === 'string') {
-            result = await sock.sendMessage(primaryJid, { text: textOrMedia, ...options });
+            result = await sock.sendMessage(jid, { text: textOrMedia, ...options });
         } else {
-            result = await sock.sendMessage(primaryJid, { ...textOrMedia, ...options });
+            result = await sock.sendMessage(jid, { ...textOrMedia, ...options });
         }
-        console.log("DEBUG REPLY: Result:", JSON.stringify(result));
+        console.log("DEBUG REPLY: Result status:", result?.status, "id:", result?.key?.id);
         return result;
     } catch (err) {
         console.error("DEBUG REPLY ERROR:", err.message || err);
-        // Fallback: try the other JID
-        try {
-            const fallbackJid = msg.key.remoteJid;
-            console.log("DEBUG REPLY FALLBACK: Trying:", fallbackJid);
-            if (typeof textOrMedia === 'string') {
-                return await sock.sendMessage(fallbackJid, { text: textOrMedia, ...options });
-            } else {
-                return await sock.sendMessage(fallbackJid, { ...textOrMedia, ...options });
-            }
-        } catch (err2) {
-            console.error("DEBUG REPLY FALLBACK ERROR:", err2.message || err2);
-        }
     }
 }
 
@@ -260,24 +248,7 @@ async function startWhatsAppBot() {
             
             // Announce presence to WhatsApp servers
             await sock.sendPresenceUpdate('available');
-            console.log("Presence set to 'available'");
-            
-            // Auto-send a test message to admin after presence is set
-            setTimeout(async () => {
-                try {
-                    // Also set presence for this specific chat
-                    await sock.presenceSubscribe('6282114003078@s.whatsapp.net');
-                    await sock.sendPresenceUpdate('composing', '6282114003078@s.whatsapp.net');
-                    
-                    console.log("AUTO-TEST: Sending test message...");
-                    const res = await sock.sendMessage('6282114003078@s.whatsapp.net', { text: '🤖 Bot is online and ready!' });
-                    console.log("AUTO-TEST Result:", JSON.stringify(res));
-                    
-                    await sock.sendPresenceUpdate('paused', '6282114003078@s.whatsapp.net');
-                } catch(e) {
-                    console.error("AUTO-TEST ERROR:", e.message);
-                }
-            }, 5000);
+            console.log("Presence set to 'available'. Send 'hi' to test!");
         }
     });
 
