@@ -13,6 +13,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const sessions = {};
 let doc;
 let sock;
+const msgStore = {};
 
 async function initGoogleSheets() {
     try {
@@ -62,7 +63,6 @@ async function logUserExpense(userName, amount, description, category, customDat
 
 async function reply(msg, textOrMedia, options = {}) {
     try {
-        // Error 463 means we MUST send to @lid JID, not @s.whatsapp.net
         const jid = msg.key.remoteJid;
         console.log("DEBUG REPLY: Sending to JID:", jid);
         let result;
@@ -70,6 +70,10 @@ async function reply(msg, textOrMedia, options = {}) {
             result = await sock.sendMessage(jid, { text: textOrMedia, ...options });
         } else {
             result = await sock.sendMessage(jid, { ...textOrMedia, ...options });
+        }
+        // Store message for error 463 retry re-encryption
+        if (result?.key?.id && result?.message) {
+            msgStore[result.key.id] = result.message;
         }
         console.log("DEBUG REPLY: Result status:", result?.status, "id:", result?.key?.id);
         return result;
@@ -222,7 +226,14 @@ async function startWhatsAppBot() {
         logger: pino({ level: 'info' }),
         browser: ['Ubuntu', 'Chrome', '20.0.04'],
         markOnlineOnConnect: true,
-        syncFullHistory: false
+        syncFullHistory: false,
+        getMessage: async (key) => {
+            if (msgStore[key.id]) {
+                console.log('getMessage: Found stored message for retry', key.id);
+                return msgStore[key.id];
+            }
+            return { conversation: '' };
+        }
     });
 
     sock.ev.on('creds.update', saveCreds);
