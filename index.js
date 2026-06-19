@@ -231,13 +231,15 @@ async function startWhatsAppBot() {
         version,
         auth: state,
         printQRInTerminal: false,
-        logger: pino({ level: 'silent' }),
-        browser: ['Ubuntu', 'Chrome', '20.0.04']
+        logger: pino({ level: 'info' }),
+        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        markOnlineOnConnect: true,
+        syncFullHistory: false
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
@@ -256,16 +258,26 @@ async function startWhatsAppBot() {
             console.log('WhatsApp Client is ready! Connected with Baileys 🚀');
             console.log('Bot identity:', JSON.stringify(sock.user));
             
-            // Auto-send a test message to admin on startup
+            // Announce presence to WhatsApp servers
+            await sock.sendPresenceUpdate('available');
+            console.log("Presence set to 'available'");
+            
+            // Auto-send a test message to admin after presence is set
             setTimeout(async () => {
                 try {
-                    console.log("AUTO-TEST: Sending test message to 6282114003078@s.whatsapp.net...");
+                    // Also set presence for this specific chat
+                    await sock.presenceSubscribe('6282114003078@s.whatsapp.net');
+                    await sock.sendPresenceUpdate('composing', '6282114003078@s.whatsapp.net');
+                    
+                    console.log("AUTO-TEST: Sending test message...");
                     const res = await sock.sendMessage('6282114003078@s.whatsapp.net', { text: '🤖 Bot is online and ready!' });
                     console.log("AUTO-TEST Result:", JSON.stringify(res));
+                    
+                    await sock.sendPresenceUpdate('paused', '6282114003078@s.whatsapp.net');
                 } catch(e) {
                     console.error("AUTO-TEST ERROR:", e.message);
                 }
-            }, 3000);
+            }, 5000);
         }
     });
 
