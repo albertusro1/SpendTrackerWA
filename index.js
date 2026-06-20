@@ -176,43 +176,71 @@ async function handleSplitBill(msg, userName, from, text) {
 
             if (openRouterKey) {
                 console.log("Using OpenRouter for receipt scanning...");
-                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                    method: "POST",
-                    headers: {
-                        "Authorization": `Bearer ${openRouterKey}`,
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
-                    },
-                    body: JSON.stringify({
-                        model: "openrouter/free",
-                        messages: [
-                            {
-                                role: "user",
-                                content: [
+                const modelsToTry = [
+                    "google/gemma-4-31b-it:free",
+                    "nvidia/nemotron-nano-12b-v2-vl:free",
+                    "openrouter/free"
+                ];
+
+                let success = false;
+                let lastError = null;
+
+                for (const modelName of modelsToTry) {
+                    try {
+                        console.log(`Trying OpenRouter model: ${modelName}`);
+                        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                            method: "POST",
+                            headers: {
+                                "Authorization": `Bearer ${openRouterKey}`,
+                                "Content-Type": "application/json",
+                                "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
+                            },
+                            body: JSON.stringify({
+                                model: modelName,
+                                messages: [
                                     {
-                                        type: "text",
-                                        text: "Extract all food and beverage line items from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers."
-                                    },
-                                    {
-                                        type: "image_url",
-                                        image_url: {
-                                            url: `data:${mimetype};base64,${buffer.toString('base64')}`
-                                        }
+                                        role: "user",
+                                        content: [
+                                            {
+                                                type: "text",
+                                                text: "Extract all food and beverage line items from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers."
+                                            },
+                                            {
+                                                type: "image_url",
+                                                image_url: {
+                                                    url: `data:${mimetype};base64,${buffer.toString('base64')}`
+                                                }
+                                            }
+                                        ]
                                     }
                                 ]
-                            }
-                        ]
-                    })
-                });
+                            })
+                        });
 
-                if (!response.ok) {
-                    const errText = await response.text();
-                    throw new Error(`OpenRouter API error: ${response.status} - ${errText}`);
+                        if (!response.ok) {
+                            const errText = await response.text();
+                            throw new Error(`Status ${response.status} - ${errText}`);
+                        }
+
+                        const data = await response.json();
+                        if (!data.choices || data.choices.length === 0) {
+                            throw new Error("No choices returned from OpenRouter");
+                        }
+
+                        const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
+                        items = JSON.parse(responseText);
+                        success = true;
+                        console.log(`Successfully parsed receipt using model: ${modelName}`);
+                        break;
+                    } catch (err) {
+                        console.warn(`Failed with model ${modelName}:`, err.message);
+                        lastError = err;
+                    }
                 }
 
-                const data = await response.json();
-                const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                items = JSON.parse(responseText);
+                if (!success) {
+                    throw new Error(`All OpenRouter models failed. Last error: ${lastError ? lastError.message : 'Unknown error'}`);
+                }
             } else {
                 console.log("Using direct Gemini API for receipt scanning...");
                 if (!genAI) {
