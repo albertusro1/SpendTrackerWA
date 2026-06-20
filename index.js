@@ -184,7 +184,7 @@ async function handleSplitBill(msg, userName, from, text) {
                         "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
                     },
                     body: JSON.stringify({
-                        model: "meta-llama/llama-3.2-11b-vision-instruct:free",
+                        model: "openrouter/free",
                         messages: [
                             {
                                 role: "user",
