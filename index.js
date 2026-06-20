@@ -272,157 +272,232 @@ async function handleSplitBill(msg, userName, from, text) {
             return;
         }
 
-        if (session.state === 'AWAITING_RECEIPT' || (session.state === 'AWAITING_MORE_RECEIPTS' && (msg.message?.imageMessage || msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage))) {
+        // Check if we are adding a receipt (either initial or subsequent)
+        if (session.state === 'AWAITING_RECEIPT' || session.state === 'AWAITING_MORE_RECEIPTS') {
             const isImage = msg.message?.imageMessage || msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage;
             
-            if (!isImage) {
-                if (session.state === 'AWAITING_MORE_RECEIPTS') {
-                    if (text === 'no' || text === 'done') {
-                        session.state = 'AWAITING_PAYERS';
-                        session.currentReceiptPayerIndex = 0;
-                        
-                        const currentReceipt = session.receipts[0];
-                        const total = currentReceipt.items.reduce((s, i) => s + i.price, 0);
-                        let prompt = `*Payer Details Required* 🧾\n\n`;
-                        prompt += `Who paid for *Bill 1* (Total: Rp ${total.toLocaleString('id-ID')})?\n\n`;
-                        prompt += `Reply with:\n`;
-                        prompt += `- A participant number:\n`;
-                        currentReceipt.participants.forEach((p, idx) => {
-                            prompt += `  ${idx + 1}. ${p}\n`;
-                        });
-                        prompt += `- Any other name not in the list (e.g. David)\n`;
-                        prompt += `- Multiple payers with amounts (e.g. Alice 100k, Bob 50k)\n`;
-                        prompt += `- Or type 'me' to default to you (${userName}).`;
-                        await reply(msg, prompt);
-                    } else {
-                        await reply(msg, "Please upload another photo of the receipt, or reply 'no'/'done' to proceed to payment.");
+            // If in AWAITING_MORE_RECEIPTS and they typed 'no' or 'done', proceed to payment
+            if (session.state === 'AWAITING_MORE_RECEIPTS' && !isImage && (text === 'no' || text === 'done')) {
+                session.state = 'AWAITING_PAYERS';
+                session.currentReceiptPayerIndex = 0;
+                
+                const currentReceipt = session.receipts[0];
+                const total = currentReceipt.items.reduce((s, i) => s + i.price, 0);
+                let prompt = `*Payer Details Required* 🧾\n\n`;
+                prompt += `Who paid for *Bill 1* (Total: Rp ${total.toLocaleString('id-ID')})?\n\n`;
+                prompt += `Reply with:\n`;
+                prompt += `- A participant number:\n`;
+                currentReceipt.participants.forEach((p, idx) => {
+                    prompt += `  ${idx + 1}. ${p}\n`;
+                });
+                prompt += `- Any other name not in the list (e.g. David)\n`;
+                prompt += `- Multiple payers with amounts (e.g. Alice 100k, Bob 50k)\n`;
+                prompt += `- Or type 'me' to default to you (${userName}).`;
+                await reply(msg, prompt);
+                return;
+            }
+
+            let items = null;
+
+            if (isImage) {
+                // Image receipt input
+                const targetMessage = msg.message?.imageMessage ? msg : { message: msg.message.extendedTextMessage.contextInfo.quotedMessage };
+                const mimetype = targetMessage.message.imageMessage.mimetype;
+                
+                const buffer = await downloadMediaMessage(
+                    targetMessage,
+                    'buffer',
+                    {},
+                    { logger: pino({ level: 'silent' }) }
+                );
+                
+                if (!buffer) {
+                    await reply(msg, "Failed to download image. Try again.");
+                    return;
+                }
+                
+                await reply(msg, "Reading receipt with AI... 🤖 Please wait a moment.");
+                
+                const openRouterKey = process.env.OPENROUTER_API_KEY;
+                if (openRouterKey) {
+                    console.log("Using OpenRouter for receipt scanning...");
+                    const modelsToTry = [
+                        "google/gemma-4-31b-it:free",
+                        "nex-agi/nex-n2-pro:free",
+                        "nvidia/nemotron-nano-12b-v2-vl:free",
+                        "openrouter/free"
+                    ];
+
+                    let success = false;
+                    let lastError = null;
+
+                    for (const modelName of modelsToTry) {
+                        let timeoutId;
+                        try {
+                            console.log(`Trying OpenRouter model: ${modelName}`);
+                            const controller = new AbortController();
+                            timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
+
+                            const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                                method: "POST",
+                                headers: {
+                                    "Authorization": `Bearer ${openRouterKey}`,
+                                    "Content-Type": "application/json",
+                                    "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
+                                },
+                                signal: controller.signal,
+                                body: JSON.stringify({
+                                    model: modelName,
+                                    messages: [
+                                        {
+                                            role: "user",
+                                            content: [
+                                                {
+                                                    type: "text",
+                                                    text: "Extract all food and beverage line items from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers."
+                                                },
+                                                {
+                                                    type: "image_url",
+                                                    image_url: {
+                                                        url: `data:${mimetype};base64,${buffer.toString('base64')}`
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                })
+                            });
+
+                            clearTimeout(timeoutId);
+
+                            if (!response.ok) {
+                                const errText = await response.text();
+                                throw new Error(`Status ${response.status} - ${errText}`);
+                            }
+
+                            const data = await response.json();
+                            if (!data.choices || data.choices.length === 0) {
+                                throw new Error("No choices returned from OpenRouter");
+                            }
+
+                            const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
+                            items = JSON.parse(responseText);
+                            success = true;
+                            console.log(`Successfully parsed receipt using model: ${modelName}`);
+                            break;
+                        } catch (err) {
+                            if (timeoutId) clearTimeout(timeoutId);
+                            console.warn(`Failed with model ${modelName}:`, err.message);
+                            lastError = err;
+                        }
+                    }
+
+                    if (!success) {
+                        throw new Error(`All OpenRouter models failed. Last error: ${lastError ? lastError.message : 'Unknown error'}`);
                     }
                 } else {
-                    await reply(msg, "Please send a photo of the receipt. If you want to cancel, type 'cancel'.");
-                }
-                return;
-            }
-            
-            const targetMessage = msg.message?.imageMessage ? msg : { message: msg.message.extendedTextMessage.contextInfo.quotedMessage };
-            const mimetype = targetMessage.message.imageMessage.mimetype;
-            
-            const buffer = await downloadMediaMessage(
-                targetMessage,
-                'buffer',
-                {},
-                { logger: pino({ level: 'silent' }) }
-            );
-            
-            if (!buffer) {
-                await reply(msg, "Failed to download image. Try again.");
-                return;
-            }
-            
-            await reply(msg, "Reading receipt with AI... 🤖 Please wait a moment.");
-            
-            let items;
-            const openRouterKey = process.env.OPENROUTER_API_KEY;
-
-            if (openRouterKey) {
-                console.log("Using OpenRouter for receipt scanning...");
-                const modelsToTry = [
-                    "google/gemma-4-31b-it:free",
-                    "nex-agi/nex-n2-pro:free",
-                    "nvidia/nemotron-nano-12b-v2-vl:free",
-                    "openrouter/free"
-                ];
-
-                let success = false;
-                let lastError = null;
-
-                for (const modelName of modelsToTry) {
-                    let timeoutId;
-                    try {
-                        console.log(`Trying OpenRouter model: ${modelName}`);
-                        const controller = new AbortController();
-                        timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
-
-                        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                            method: "POST",
-                            headers: {
-                                "Authorization": `Bearer ${openRouterKey}`,
-                                "Content-Type": "application/json",
-                                "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
-                            },
-                            signal: controller.signal,
-                            body: JSON.stringify({
-                                model: modelName,
-                                messages: [
-                                    {
-                                        role: "user",
-                                        content: [
-                                            {
-                                                type: "text",
-                                                text: "Extract all food and beverage line items from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers."
-                                            },
-                                            {
-                                                type: "image_url",
-                                                image_url: {
-                                                    url: `data:${mimetype};base64,${buffer.toString('base64')}`
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            })
-                        });
-
-                        clearTimeout(timeoutId);
-
-                        if (!response.ok) {
-                            const errText = await response.text();
-                            throw new Error(`Status ${response.status} - ${errText}`);
-                        }
-
-                        const data = await response.json();
-                        if (!data.choices || data.choices.length === 0) {
-                            throw new Error("No choices returned from OpenRouter");
-                        }
-
-                        const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                        items = JSON.parse(responseText);
-                        success = true;
-                        console.log(`Successfully parsed receipt using model: ${modelName}`);
-                        break;
-                    } catch (err) {
-                        if (timeoutId) clearTimeout(timeoutId);
-                        console.warn(`Failed with model ${modelName}:`, err.message);
-                        lastError = err;
+                    console.log("Using direct Gemini API for receipt scanning...");
+                    if (!genAI) {
+                        throw new Error("GEMINI_API_KEY is not configured in your .env file.");
                     }
-                }
-
-                if (!success) {
-                    throw new Error(`All OpenRouter models failed. Last error: ${lastError ? lastError.message : 'Unknown error'}`);
+                    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+                    const prompt = "Extract all food and beverage line items from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
+                    
+                    const imageParts = [
+                        {
+                            inlineData: {
+                                data: buffer.toString('base64'),
+                                mimeType: mimetype
+                            }
+                        }
+                    ];
+                    
+                    const result = await model.generateContent([prompt, ...imageParts]);
+                    const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
+                    items = JSON.parse(responseText);
                 }
             } else {
-                console.log("Using direct Gemini API for receipt scanning...");
-                if (!genAI) {
-                    throw new Error("GEMINI_API_KEY is not configured in your .env file.");
-                }
-                const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                const prompt = "Extract all food and beverage line items from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
-                
-                const imageParts = [
-                    {
-                        inlineData: {
-                            data: buffer.toString('base64'),
-                            mimeType: mimetype
+                // Text receipt input
+                await reply(msg, "Parsing your items text... 🤖");
+                const openRouterKey = process.env.OPENROUTER_API_KEY;
+                const rawText = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || '';
+                const prompt = "Extract all food and beverage line items from the following text description. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax, service charge, or subtotal, only the individual items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nInput text:\n" + rawText;
+
+                if (openRouterKey) {
+                    console.log("Using OpenRouter for text items parsing...");
+                    const modelsToTry = [
+                        "google/gemma-4-31b-it:free",
+                        "nex-agi/nex-n2-pro:free",
+                        "openrouter/free"
+                    ];
+
+                    let success = false;
+                    let lastError = null;
+
+                    for (const modelName of modelsToTry) {
+                        let timeoutId;
+                        try {
+                            const controller = new AbortController();
+                            timeoutId = setTimeout(() => controller.abort(), 20000);
+
+                            const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                                method: "POST",
+                                headers: {
+                                    "Authorization": `Bearer ${openRouterKey}`,
+                                    "Content-Type": "application/json",
+                                    "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
+                                },
+                                signal: controller.signal,
+                                body: JSON.stringify({
+                                    model: modelName,
+                                    messages: [
+                                        {
+                                            role: "user",
+                                            content: prompt
+                                        }
+                                    ]
+                                })
+                            });
+
+                            clearTimeout(timeoutId);
+
+                            if (!response.ok) {
+                                const errText = await response.text();
+                                throw new Error(`Status ${response.status} - ${errText}`);
+                            }
+
+                            const data = await response.json();
+                            if (!data.choices || data.choices.length === 0) {
+                                throw new Error("No choices returned from OpenRouter");
+                            }
+
+                            const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
+                            items = JSON.parse(responseText);
+                            success = true;
+                            break;
+                        } catch (err) {
+                            if (timeoutId) clearTimeout(timeoutId);
+                            lastError = err;
                         }
                     }
-                ];
-                
-                const result = await model.generateContent([prompt, ...imageParts]);
-                const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                items = JSON.parse(responseText);
+
+                    if (!success) {
+                        throw new Error(`All OpenRouter models failed. Last error: ${lastError ? lastError.message : 'Unknown error'}`);
+                    }
+                } else {
+                    console.log("Using direct Gemini API for text items parsing...");
+                    if (!genAI) {
+                        throw new Error("GEMINI_API_KEY is not configured in your .env file.");
+                    }
+                    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+                    const result = await model.generateContent(prompt);
+                    const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
+                    items = JSON.parse(responseText);
+                }
             }
-            
-            if (!items || items.length === 0) throw new Error("No items found");
-            
+
+            if (!items || items.length === 0) throw new Error("No items parsed");
+
             const newItems = items.map(item => ({ name: item.name, price: item.price, owners: [] }));
             
             if (!session.receipts) {
