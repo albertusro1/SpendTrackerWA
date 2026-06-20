@@ -420,11 +420,12 @@ async function handleSplitBill(msg, userName, from, text) {
                 // Text receipt input
                 await reply(msg, "Parsing your items text... 🤖");
                 const openRouterKey = process.env.OPENROUTER_API_KEY;
-                const prompt = "Extract all line items, services, products, or charges from the following text description. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax, service charge, grand total, or subtotal, only the individual items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nInput text:\n" + text;
+                const prompt = "Extract all line items, services, products, or charges from the following text description. Return a JSON array where each object has 'name' (string) and 'price' (number). Convert price shorthand notations like 'k', 'K', 'rb', 'ribu' to their full numeric values (e.g. 163k or 163K becomes 163000, 50k becomes 50000). Do not include tax, service charge, grand total, or subtotal, only the individual items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nInput text:\n" + text;
 
                 if (openRouterKey) {
                     console.log("Using OpenRouter for text items parsing...");
                     const modelsToTry = [
+                        "meta-llama/llama-3.3-70b-instruct:free",
                         "google/gemma-4-31b-it:free",
                         "nex-agi/nex-n2-pro:free",
                         "openrouter/free"
