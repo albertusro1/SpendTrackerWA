@@ -7,10 +7,13 @@ services:
     shm_size: '1g'
     volumes:
       - ./auth_session:/.wwebjs_auth
+    env_file:
+      - .env
     environment:
       - NODE_ENV=production
       - NODE_OPTIONS="--dns-result-order=ipv4first"
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
     deploy:
       resources:
         limits:
