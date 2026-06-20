@@ -61,6 +61,31 @@ async function logUserExpense(userName, amount, description, category, customDat
     await sheet.addRow({ Timestamp: timestamp, Description: description, Amount: amount, Category: category });
 }
 
+// Parse Indonesian date format: "20/6/2026 17.15.00" or "20/6/2026, 17.15.00"
+function parseIdDate(str) {
+    if (!str) return null;
+    try {
+        const cleaned = str.replace(',', '').trim();
+        const [datePart] = cleaned.split(' ');
+        if (!datePart) return null;
+        const parts = datePart.split('/');
+        if (parts.length < 3) return null;
+        const [d, m, y] = parts;
+        return new Date(parseInt(y), parseInt(m) - 1, parseInt(d));
+    } catch (e) {
+        return null;
+    }
+}
+
+function getStartOfWeek(date) {
+    const d = new Date(date);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday start
+    d.setDate(diff);
+    d.setHours(0, 0, 0, 0);
+    return d;
+}
+
 async function reply(msg, textOrMedia, options = {}) {
     try {
         const jid = msg.key.remoteJid;
@@ -357,20 +382,58 @@ async function startWhatsAppBot() {
                 }
 
                 const CATEGORIES = {
-                    'Food & Beverage': ['makan', 'minum', 'kopi', 'nasi', 'gofood', 'grabfood', 'mcd'],
-                    'Groceries': ['aeon', 'supermarket', 'indomaret', 'alfamart', 'sayur'],
-                    'Transportation': ['bensin', 'grab', 'gojek', 'tol', 'parkir', 'pertamax'],
-                    'Utilities': ['listrik', 'token', 'internet', 'pulsa', 'air']
+                    'Food & Beverage': [
+                        'makan', 'minum', 'kopi', 'nasi', 'ayam', 'bakso', 'sate', 'soto',
+                        'rendang', 'gudeg', 'rawon', 'pecel', 'tempe', 'tahu', 'sambal',
+                        'es teh', 'es jeruk', 'jus', 'susu', 'roti', 'kue', 'gorengan', 'martabak',
+                        'gofood', 'grabfood', 'mcd', 'kfc', 'starbucks', 'chatime', 'warung',
+                        'food', 'eat', 'lunch', 'dinner', 'breakfast', 'brunch', 'snack',
+                        'coffee', 'tea', 'juice', 'milk', 'bread', 'cake', 'pizza', 'burger',
+                        'rice', 'noodle', 'pasta', 'chicken', 'beef', 'fish', 'salad',
+                        'restaurant', 'cafe', 'bistro', 'dine', 'meal', 'dessert', 'ice cream',
+                        'boba', 'matcha', 'latte', 'espresso', 'americano', 'croissant',
+                        'sandwich', 'wrap', 'sushi', 'ramen', 'donut', 'waffle', 'pancake',
+                        'salt', 'chocolate', 'cookie', 'pastry', 'fries', 'padang',
+                    ],
+                    'Groceries': [
+                        'supermarket', 'indomaret', 'alfamart', 'hypermart', 'aeon',
+                        'sayur', 'buah', 'bumbu', 'sabun', 'shampo', 'tissue',
+                        'grocery', 'market', 'store', 'mart', 'vegetable', 'fruit',
+                    ],
+                    'Transportation': [
+                        'bensin', 'grab', 'gojek', 'tol', 'parkir', 'pertamax',
+                        'taxi', 'uber', 'gas', 'fuel', 'train', 'bus', 'mrt',
+                        'ojek', 'transjakarta', 'commuter', 'travel', 'toll',
+                    ],
+                    'Utilities': [
+                        'listrik', 'token', 'internet', 'pulsa', 'air', 'pdam',
+                        'electric', 'water', 'phone', 'wifi', 'bill', 'subscription',
+                    ],
+                    'Shopping': [
+                        'baju', 'celana', 'sepatu', 'tas', 'jam', 'aksesori',
+                        'clothes', 'shoes', 'bag', 'watch', 'shirt', 'pants',
+                        'dress', 'fashion', 'shopee', 'tokopedia', 'lazada',
+                    ],
+                    'Health': [
+                        'obat', 'dokter', 'rumah sakit', 'apotek', 'vitamin',
+                        'medicine', 'doctor', 'hospital', 'pharmacy', 'clinic', 'gym',
+                    ],
+                    'Entertainment': [
+                        'bioskop', 'film', 'game', 'netflix', 'spotify', 'youtube',
+                        'movie', 'cinema', 'concert', 'ticket', 'karaoke',
+                    ],
                 };
                 let category = 'Miscellaneous';
+                const searchText = argsText.toLowerCase();
                 for (const [cat, keys] of Object.entries(CATEGORIES)) {
-                    if (keys.some(k => argsText.toLowerCase().includes(k))) {
+                    if (keys.some(k => searchText.includes(k))) {
                         category = cat; break;
                     }
                 }
 
                 await logUserExpense(userName, amount, description, category, customDate);
-                await reply(msg, `✅ Recorded!\nDesc: ${description}\nCat: ${category}\nAmt: Rp ${amount.toLocaleString('id-ID')}\nDate: ${customDate || 'Today'}`);
+                const catEmojis = { 'Food & Beverage': '🍔', 'Groceries': '🛒', 'Transportation': '🚗', 'Utilities': '⚡', 'Shopping': '🛍️', 'Health': '💊', 'Entertainment': '🎬', 'Miscellaneous': '📦' };
+                await reply(msg, `✅ *Recorded!*\n\n📝 ${description}\n${catEmojis[category] || '📦'} ${category}\n💰 Rp ${amount.toLocaleString('id-ID')}\n📅 ${customDate || 'Today'}`);
             }
             else if (command === '/summary') {
                 const sheet = doc.sheetsByTitle[userName];
@@ -379,22 +442,78 @@ async function startWhatsAppBot() {
                     return;
                 }
                 const rows = await sheet.getRows();
+                
+                // Date filtering
+                const filter = argsText.toLowerCase() || 'today';
+                const now = new Date();
+                const jakartaNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
+                const todayStart = new Date(jakartaNow.getFullYear(), jakartaNow.getMonth(), jakartaNow.getDate());
+                const weekStart = getStartOfWeek(jakartaNow);
+                const monthStart = new Date(jakartaNow.getFullYear(), jakartaNow.getMonth(), 1);
+                
+                let filterStart = todayStart;
+                let filterLabel = 'Today';
+                if (filter === 'wtd' || filter === 'week') {
+                    filterStart = weekStart;
+                    filterLabel = 'This Week';
+                } else if (filter === 'mtd' || filter === 'month') {
+                    filterStart = monthStart;
+                    filterLabel = 'Month to Date';
+                } else if (filter === 'all') {
+                    filterStart = new Date(0);
+                    filterLabel = 'All Time';
+                }
+                
+                const dateStr = jakartaNow.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                
                 let total = 0;
-                const catTotals = {};
+                let txCount = 0;
+                const catData = {}; // { category: { total, items: [{desc, amt}] } }
                 
                 rows.forEach(r => {
                     const amt = parseFloat(r.get('Amount'));
-                    if (!isNaN(amt)) {
-                        total += amt;
-                        const cat = r.get('Category');
-                        catTotals[cat] = (catTotals[cat] || 0) + amt;
-                    }
+                    if (isNaN(amt)) return;
+                    
+                    const rowDate = parseIdDate(r.get('Timestamp'));
+                    if (rowDate && rowDate < filterStart) return;
+                    
+                    total += amt;
+                    txCount++;
+                    const cat = r.get('Category') || 'Miscellaneous';
+                    const desc = r.get('Description') || 'No description';
+                    if (!catData[cat]) catData[cat] = { total: 0, items: [] };
+                    catData[cat].total += amt;
+                    catData[cat].items.push({ desc, amt });
                 });
-
-                let res = `📊 *Summary*\nTotal: Rp ${total.toLocaleString('id-ID')}\n\n`;
-                for (const [c, a] of Object.entries(catTotals)) {
-                    res += `${c}: Rp ${a.toLocaleString('id-ID')}\n`;
+                
+                if (txCount === 0) {
+                    await reply(msg, `📊 *Summary — ${filterLabel}*\n━━━━━━━━━━━━━━━━━\n\nNo expenses found for this period.`);
+                    return;
                 }
+                
+                const catEmojis = { 'Food & Beverage': '🍔', 'Groceries': '🛒', 'Transportation': '🚗', 'Utilities': '⚡', 'Shopping': '🛍️', 'Health': '💊', 'Entertainment': '🎬', 'Miscellaneous': '📦' };
+                
+                let res = `📊 *Summary — ${filterLabel} (${dateStr})*\n`;
+                res += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+                res += `💰 *Total: Rp ${total.toLocaleString('id-ID')}*\n`;
+                res += `📝 *Transactions: ${txCount}*\n\n`;
+                res += `📂 *By Category:*\n`;
+                
+                // Sort categories by total descending
+                const sorted = Object.entries(catData).sort((a, b) => b[1].total - a[1].total);
+                
+                for (const [cat, data] of sorted) {
+                    const emoji = catEmojis[cat] || '📦';
+                    const pct = Math.round((data.total / total) * 100);
+                    res += `┌──────────────────\n`;
+                    res += `│ ${emoji} *${cat}*\n`;
+                    res += `│    Rp ${data.total.toLocaleString('id-ID')} (${data.items.length} item${data.items.length > 1 ? 's' : ''}, ${pct}%)\n`;
+                    data.items.forEach(item => {
+                        res += `│    • ${item.desc} — Rp ${item.amt.toLocaleString('id-ID')}\n`;
+                    });
+                    res += `└──────────────────\n`;
+                }
+                
                 await reply(msg, res);
             }
             else if (command === '/splitbill') {
