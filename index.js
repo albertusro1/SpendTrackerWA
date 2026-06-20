@@ -598,24 +598,32 @@ async function startWhatsAppBot() {
 
         // Convert @s.whatsapp.net to @c.us for backward compatibility with existing sheet logic
         const from = msg.key.remoteJid.replace('@s.whatsapp.net', '@c.us');
+        const altFrom = msg.key.remoteJidAlt ? msg.key.remoteJidAlt.replace('@s.whatsapp.net', '@c.us') : null;
         const rawText = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || '';
         const text = rawText.trim().toLowerCase();
+
+        const isAdmin = (from === ADMIN_NUMBER) || (altFrom && altFrom === ADMIN_NUMBER);
 
         console.log("\n======================================");
         console.log("DEBUG: INCOMING MESSAGE RECEIVED");
         console.log("-> msg.key:", JSON.stringify(msg.key));
         console.log("-> from (converted):", from);
+        if (altFrom) console.log("-> altFrom (converted):", altFrom);
         console.log("-> ADMIN_NUMBER:", ADMIN_NUMBER);
-        console.log("-> Exact match?:", from === ADMIN_NUMBER);
+        console.log("-> Exact match (primary/alt)?:", isAdmin);
         console.log("-> rawText:", rawText);
         console.log("======================================\n");
         
         try {
             if (!doc) await initGoogleSheets();
             
-            const userName = await isUserAuthorized(from);
+            let userName = await isUserAuthorized(from);
+            if (!userName && altFrom) {
+                userName = await isUserAuthorized(altFrom);
+            }
+            
             if (!userName) {
-                await reply(msg, "⛔ Unauthorized. Please ask the Admin to add your number.");
+                await reply(msg, `⛔ Unauthorized. Please ask the Admin to add your number or JID.\n\nYour details:\n- Phone/JID: ${altFrom || from}`);
                 return;
             }
 
@@ -637,7 +645,7 @@ async function startWhatsAppBot() {
             const argsText = rawArgs.slice(1).join(' ').trim();
 
             if (command === '/adduser') {
-                if (from !== ADMIN_NUMBER) {
+                if (!isAdmin) {
                     await reply(msg, "⛔ Boss Only! You don't have permission.");
                     return;
                 }
