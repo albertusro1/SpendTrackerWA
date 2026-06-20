@@ -226,7 +226,6 @@ async function startWhatsAppBot() {
         logger: pino({ level: 'info' }),
         browser: ['Ubuntu', 'Chrome', '20.0.04'],
         markOnlineOnConnect: true,
-        syncFullHistory: false,
         getMessage: async (key) => {
             if (msgStore[key.id]) {
                 console.log('getMessage: Found stored message for retry', key.id);
