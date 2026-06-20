@@ -110,7 +110,7 @@ async function reply(msg, textOrMedia, options = {}) {
 async function askForOwners(msg, session, from) {
     const receipt = session.receipts[session.currentReceiptIndex];
     const item = receipt.items[session.currentItemIndex];
-    let prompt = `Who shared the *${item.name}* (Rp ${item.price.toLocaleString('id-ID')})?\n\nReply with numbers:\n`;
+    let prompt = `Who shared the *${item.name}* (Rp ${item.price.toLocaleString('id-ID')})?\n\nReply with numbers (e.g. '1, 2') or type 'all':\n`;
     receipt.participants.forEach((p, idx) => {
         prompt += `${idx + 1}. ${p}\n`;
     });
@@ -698,15 +698,18 @@ async function handleSplitBill(msg, userName, from, text) {
             const receipt = session.receipts[session.currentReceiptIndex];
             const item = receipt.items[session.currentItemIndex];
             
-            const ownerIndexes = text.split(/[\s,]+/).map(n => parseInt(n.trim(), 10) - 1);
-            
             let validOwners = [];
-            ownerIndexes.forEach(idx => {
-                if (receipt.participants[idx]) validOwners.push(receipt.participants[idx]);
-            });
+            if (text.trim().toLowerCase() === 'all') {
+                validOwners = [...receipt.participants];
+            } else {
+                const ownerIndexes = text.split(/[\s,]+/).map(n => parseInt(n.trim(), 10) - 1);
+                ownerIndexes.forEach(idx => {
+                    if (receipt.participants[idx]) validOwners.push(receipt.participants[idx]);
+                });
+            }
             
             if (validOwners.length === 0) {
-                await reply(msg, `Please reply with valid numbers from the list (e.g. '1, 2').`);
+                await reply(msg, `Please reply with valid numbers from the list (e.g. '1, 2') or type 'all'.`);
                 return;
             }
             
