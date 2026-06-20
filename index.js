@@ -327,6 +327,7 @@ async function handleSplitBill(msg, userName, from, text) {
                 console.log("Using OpenRouter for receipt scanning...");
                 const modelsToTry = [
                     "google/gemma-4-31b-it:free",
+                    "nex-agi/nex-n2-pro:free",
                     "nvidia/nemotron-nano-12b-v2-vl:free",
                     "openrouter/free"
                 ];
@@ -335,8 +336,12 @@ async function handleSplitBill(msg, userName, from, text) {
                 let lastError = null;
 
                 for (const modelName of modelsToTry) {
+                    let timeoutId;
                     try {
                         console.log(`Trying OpenRouter model: ${modelName}`);
+                        const controller = new AbortController();
+                        timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
+
                         const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
                             method: "POST",
                             headers: {
@@ -344,6 +349,7 @@ async function handleSplitBill(msg, userName, from, text) {
                                 "Content-Type": "application/json",
                                 "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
                             },
+                            signal: controller.signal,
                             body: JSON.stringify({
                                 model: modelName,
                                 messages: [
@@ -366,6 +372,8 @@ async function handleSplitBill(msg, userName, from, text) {
                             })
                         });
 
+                        clearTimeout(timeoutId);
+
                         if (!response.ok) {
                             const errText = await response.text();
                             throw new Error(`Status ${response.status} - ${errText}`);
@@ -382,6 +390,7 @@ async function handleSplitBill(msg, userName, from, text) {
                         console.log(`Successfully parsed receipt using model: ${modelName}`);
                         break;
                     } catch (err) {
+                        if (timeoutId) clearTimeout(timeoutId);
                         console.warn(`Failed with model ${modelName}:`, err.message);
                         lastError = err;
                     }
