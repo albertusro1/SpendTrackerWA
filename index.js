@@ -8,7 +8,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const ADMIN_NUMBER = (process.env.ADMIN_NUMBER || '').trim();
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null;
 
 const sessions = {};
 let doc;
@@ -171,21 +171,69 @@ async function handleSplitBill(msg, userName, from, text) {
             
             await reply(msg, "Reading receipt with AI... 🤖 Please wait a moment.");
             
-            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-            const prompt = "Extract all food and beverage line items from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
-            
-            const imageParts = [
-                {
-                    inlineData: {
-                        data: buffer.toString('base64'),
-                        mimeType: mimetype
-                    }
+            let items;
+            const openRouterKey = process.env.OPENROUTER_API_KEY;
+
+            if (openRouterKey) {
+                console.log("Using OpenRouter for receipt scanning...");
+                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${openRouterKey}`,
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
+                    },
+                    body: JSON.stringify({
+                        model: "meta-llama/llama-3.2-11b-vision-instruct:free",
+                        messages: [
+                            {
+                                role: "user",
+                                content: [
+                                    {
+                                        type: "text",
+                                        text: "Extract all food and beverage line items from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers."
+                                    },
+                                    {
+                                        type: "image_url",
+                                        image_url: {
+                                            url: `data:${mimetype};base64,${buffer.toString('base64')}`
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    })
+                });
+
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error(`OpenRouter API error: ${response.status} - ${errText}`);
                 }
-            ];
-            
-            const result = await model.generateContent([prompt, ...imageParts]);
-            const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-            const items = JSON.parse(responseText);
+
+                const data = await response.json();
+                const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
+                items = JSON.parse(responseText);
+            } else {
+                console.log("Using direct Gemini API for receipt scanning...");
+                if (!genAI) {
+                    throw new Error("GEMINI_API_KEY is not configured in your .env file.");
+                }
+                const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+                const prompt = "Extract all food and beverage line items from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
+                
+                const imageParts = [
+                    {
+                        inlineData: {
+                            data: buffer.toString('base64'),
+                            mimeType: mimetype
+                        }
+                    }
+                ];
+                
+                const result = await model.generateContent([prompt, ...imageParts]);
+                const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
+                items = JSON.parse(responseText);
+            }
             
             if (!items || items.length === 0) throw new Error("No items found");
             
