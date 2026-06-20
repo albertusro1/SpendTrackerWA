@@ -266,7 +266,7 @@ async function handleSplitBill(msg, userName, from, text) {
     const session = sessions[from];
     
     try {
-        if (text === 'cancel') {
+        if (text.toLowerCase() === 'cancel') {
             delete sessions[from];
             await reply(msg, "❌ Split bill session cancelled.");
             return;
@@ -277,7 +277,7 @@ async function handleSplitBill(msg, userName, from, text) {
             const isImage = msg.message?.imageMessage || msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage;
             
             // If in AWAITING_MORE_RECEIPTS and they typed 'no' or 'done', proceed to payment
-            if (session.state === 'AWAITING_MORE_RECEIPTS' && !isImage && (text === 'no' || text === 'done')) {
+            if (session.state === 'AWAITING_MORE_RECEIPTS' && !isImage && (text.toLowerCase() === 'no' || text.toLowerCase() === 'done')) {
                 session.state = 'AWAITING_PAYERS';
                 session.currentReceiptPayerIndex = 0;
                 
@@ -354,7 +354,7 @@ async function handleSplitBill(msg, userName, from, text) {
                                             content: [
                                                 {
                                                     type: "text",
-                                                    text: "Extract all food and beverage line items from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers."
+                                                    text: "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers."
                                                 },
                                                 {
                                                     type: "image_url",
@@ -401,7 +401,7 @@ async function handleSplitBill(msg, userName, from, text) {
                         throw new Error("GEMINI_API_KEY is not configured in your .env file.");
                     }
                     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                    const prompt = "Extract all food and beverage line items from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
+                    const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax or subtotal, only the items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
                     
                     const imageParts = [
                         {
@@ -420,8 +420,7 @@ async function handleSplitBill(msg, userName, from, text) {
                 // Text receipt input
                 await reply(msg, "Parsing your items text... 🤖");
                 const openRouterKey = process.env.OPENROUTER_API_KEY;
-                const rawText = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || '';
-                const prompt = "Extract all food and beverage line items from the following text description. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax, service charge, or subtotal, only the individual items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nInput text:\n" + rawText;
+                const prompt = "Extract all line items, services, products, or charges from the following text description. Return a JSON array where each object has 'name' (string) and 'price' (number). Do not include tax, service charge, grand total, or subtotal, only the individual items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nInput text:\n" + text;
 
                 if (openRouterKey) {
                     console.log("Using OpenRouter for text items parsing...");
@@ -545,13 +544,13 @@ async function handleSplitBill(msg, userName, from, text) {
             session.currentItemIndex++;
             if (session.currentItemIndex >= receipt.items.length) {
                 session.state = 'AWAITING_MORE_RECEIPTS';
-                await reply(msg, `All items for Bill ${session.receipts.length} have been assigned! 🧾\n\nDo you want to add another receipt to this split session?\n- Upload another photo of a receipt.\n- Or reply 'no' / 'done' to proceed to payment.`);
+                await reply(msg, `All items for Bill ${session.receipts.length} have been assigned! 🧾\n\nDo you want to add another receipt to this split session?\n- Upload another photo of a receipt.\n- Type/paste another items list (e.g. "Badminton 163k").\n- Or reply 'no' / 'done' to proceed to payment.`);
             } else {
                 await askForOwners(msg, session, from);
             }
         }
         else if (session.state === 'AWAITING_MORE_RECEIPTS') {
-            if (text === 'no' || text === 'done') {
+            if (text.toLowerCase() === 'no' || text.toLowerCase() === 'done') {
                 session.state = 'AWAITING_PAYERS';
                 session.currentReceiptPayerIndex = 0;
                 
@@ -569,7 +568,7 @@ async function handleSplitBill(msg, userName, from, text) {
                 prompt += `- Or type 'me' to default to you (${userName}).`;
                 await reply(msg, prompt);
             } else {
-                await reply(msg, "Please upload another photo of the receipt, or reply 'no'/'done' to proceed to payment.");
+                await reply(msg, "Please upload another photo, type/paste your items list, or reply 'no'/'done' to proceed to payment.");
             }
         }
         else if (session.state === 'AWAITING_PAYERS') {
@@ -703,7 +702,7 @@ async function startWhatsAppBot() {
             }
 
             if (sessions[from]) {
-                await handleSplitBill(msg, userName, from, text);
+                await handleSplitBill(msg, userName, from, rawText.trim());
                 return;
             }
 
@@ -898,8 +897,12 @@ async function startWhatsAppBot() {
                 await reply(msg, res);
             }
             else if (command === '/splitbill') {
-                sessions[from] = { state: 'AWAITING_RECEIPT', items: [], receiptCount: 0 };
-                await reply(msg, "Alright! Send me a photo of the receipt to get started.");
+                sessions[from] = { state: 'AWAITING_RECEIPT' };
+                if (argsText) {
+                    await handleSplitBill(msg, userName, from, argsText);
+                } else {
+                    await reply(msg, "Alright! Please send me a photo of the receipt, OR type/paste your items list (e.g. \"Badminton 163k\" or \"Pizza 100k, Coke 20k\") to get started.");
+                }
             }
         } catch (e) {
             console.error(e);
