@@ -116,27 +116,141 @@ async function askForOwners(msg, session, from) {
     await reply(msg, prompt);
 }
 
-async function calculateSplitBill(msg, session, userName, from) {
-    const debts = {};
-    session.participants.forEach(p => debts[p] = 0);
+function parsePayers(text, participants, totalBill, userName) {
+    const cleaned = text.trim().toLowerCase();
+    
+    if (cleaned === 'me' || cleaned === 'i') {
+        return [{ name: userName, amount: totalBill }];
+    }
+    
+    const numIdx = parseInt(cleaned, 10);
+    if (!isNaN(numIdx) && numIdx > 0 && numIdx <= participants.length) {
+        return [{ name: participants[numIdx - 1], amount: totalBill }];
+    }
+    
+    const parts = text.split(',');
+    const results = [];
+    let parsedTotal = 0;
+    
+    for (const part of parts) {
+        const trimmed = part.trim();
+        if (!trimmed) continue;
+        
+        const match = trimmed.match(/^(.+?)(?:\s+(\d+)(?:\s*(k|rb|ribu))?)?$/i);
+        if (match) {
+            let nameOrNum = match[1].trim();
+            let amount = match[2] ? parseInt(match[2], 10) : null;
+            if (amount && match[3] && ['k', 'rb', 'ribu'].includes(match[3].toLowerCase())) {
+                amount *= 1000;
+            }
+            
+            const idx = parseInt(nameOrNum, 10);
+            if (!isNaN(idx) && idx > 0 && idx <= participants.length) {
+                nameOrNum = participants[idx - 1];
+            }
+            
+            results.push({ name: nameOrNum, amount });
+            if (amount) parsedTotal += amount;
+        }
+    }
+    
+    if (results.length === 0) {
+        return null;
+    }
+    
+    const withoutAmount = results.filter(r => r.amount === null);
+    if (withoutAmount.length > 0) {
+        const remaining = Math.max(0, totalBill - parsedTotal);
+        const perPerson = remaining / withoutAmount.length;
+        withoutAmount.forEach(r => r.amount = perPerson);
+    }
+    
+    return results;
+}
+
+async function calculateSplitBill(msg, session, userName, from, payers) {
+    const totalBill = session.items.reduce((sum, item) => sum + item.price, 0);
+    
+    const consumptions = {};
+    session.participants.forEach(p => consumptions[p] = 0);
     
     session.items.forEach(item => {
         const perPerson = item.price / item.owners.length;
         item.owners.forEach(o => {
-            if (debts[o] !== undefined) debts[o] += perPerson;
-            else debts[o] = perPerson;
+            consumptions[o] = (consumptions[o] || 0) + perPerson;
         });
     });
     
-    let report = `🧾 *Split Bill Summary*\n\n`;
-    report += `*Items:*\n`;
-    session.items.forEach(item => {
-        report += `- ${item.name} (Rp ${item.price.toLocaleString('id-ID')}): ${item.owners.join(', ')}\n`;
+    const payments = {};
+    payers.forEach(p => {
+        payments[p.name] = (payments[p.name] || 0) + p.amount;
     });
-    report += `\n*Totals:*\n`;
-    for (const [p, amt] of Object.entries(debts)) {
-        if (amt > 0) report += `- ${p} owes ${userName}: Rp ${Math.round(amt).toLocaleString('id-ID')}\n`;
+    
+    const allNames = new Set([...Object.keys(consumptions), ...Object.keys(payments)]);
+    const balances = {};
+    allNames.forEach(name => {
+        const cons = consumptions[name] || 0;
+        const pay = payments[name] || 0;
+        balances[name] = cons - pay;
+    });
+    
+    const debtors = [];
+    const creditors = [];
+    for (const [name, bal] of Object.entries(balances)) {
+        if (bal > 0.01) {
+            debtors.push({ name, amount: bal });
+        } else if (bal < -0.01) {
+            creditors.push({ name, amount: -bal });
+        }
     }
+    
+    const settlements = [];
+    let dIdx = 0;
+    let cIdx = 0;
+    
+    while (dIdx < debtors.length && cIdx < creditors.length) {
+        const d = debtors[dIdx];
+        const c = creditors[cIdx];
+        const settleAmt = Math.min(d.amount, c.amount);
+        
+        settlements.push({
+            from: d.name,
+            to: c.name,
+            amount: Math.round(settleAmt)
+        });
+        
+        d.amount -= settleAmt;
+        c.amount -= settleAmt;
+        
+        if (d.amount < 0.01) dIdx++;
+        if (c.amount < 0.01) cIdx++;
+    }
+    
+    let report = `🧾 *Split Bill Summary*\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+    
+    report += `*Items List:*\n`;
+    session.items.forEach((item, idx) => {
+        report += `${idx + 1}. ${item.name} (Rp ${item.price.toLocaleString('id-ID')}) — ${item.owners.join(', ')}\n`;
+    });
+    report += `\n*Total Bill:* Rp ${totalBill.toLocaleString('id-ID')}\n\n`;
+    
+    report += `*Payments:*\n`;
+    for (const [name, pay] of Object.entries(payments)) {
+        if (pay > 0) {
+            report += `- ${name} paid Rp ${Math.round(pay).toLocaleString('id-ID')}\n`;
+        }
+    }
+    report += `\n`;
+    
+    report += `*Settlements (Who owes who):*\n`;
+    if (settlements.length === 0) {
+        report += `✅ Everyone is even! No transactions needed.`;
+    } else {
+        settlements.forEach(s => {
+            report += `- *${s.from}* owes *${s.to}*: Rp ${s.amount.toLocaleString('id-ID')}\n`;
+        });
+    }
+    
     await reply(msg, report);
     delete sessions[from];
 }
@@ -145,12 +259,36 @@ async function handleSplitBill(msg, userName, from, text) {
     const session = sessions[from];
     
     try {
-        if (session.state === 'AWAITING_RECEIPT') {
+        if (text === 'cancel') {
+            delete sessions[from];
+            await reply(msg, "❌ Split bill session cancelled.");
+            return;
+        }
+
+        if (session.state === 'AWAITING_RECEIPT' || (session.state === 'AWAITING_MORE_RECEIPTS' && (msg.message?.imageMessage || msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage))) {
             const isImage = msg.message?.imageMessage || msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage;
             
             if (!isImage) {
-                await reply(msg, "Please send a photo of the receipt. If you want to cancel, type 'cancel'.");
-                if (text === 'cancel') delete sessions[from];
+                if (session.state === 'AWAITING_MORE_RECEIPTS') {
+                    if (text === 'no' || text === 'done') {
+                        session.state = 'AWAITING_PAYERS';
+                        const totalBill = session.items.reduce((sum, item) => sum + item.price, 0);
+                        let prompt = `The total bill is *Rp ${totalBill.toLocaleString('id-ID')}*.\n\nWho paid for this bill?\n\n`;
+                        prompt += `Reply with:\n`;
+                        prompt += `- A number from the participant list:\n`;
+                        session.participants.forEach((p, idx) => {
+                            prompt += `  ${idx + 1}. ${p}\n`;
+                        });
+                        prompt += `- Any other name not in the list (e.g. David)\n`;
+                        prompt += `- Multiple payers with amounts (e.g. Alice 100k, Bob 50k)\n`;
+                        prompt += `- Or type 'me' to default to you (${userName}).`;
+                        await reply(msg, prompt);
+                    } else {
+                        await reply(msg, "Please upload another photo of the receipt, or reply 'no'/'done' to proceed to payment.");
+                    }
+                } else {
+                    await reply(msg, "Please send a photo of the receipt. If you want to cancel, type 'cancel'.");
+                }
                 return;
             }
             
@@ -265,10 +403,24 @@ async function handleSplitBill(msg, userName, from, text) {
             
             if (!items || items.length === 0) throw new Error("No items found");
             
-            session.items = items.map(item => ({ name: item.name, price: item.price, owners: [] }));
-            session.state = 'AWAITING_PARTICIPANTS';
-            await reply(msg, `Found ${items.length} items! 🎉\n\nWho is sharing this bill? Send a comma-separated list of names (e.g., Alice, Bob, Charlie).`);
+            const newItems = items.map(item => ({ name: item.name, price: item.price, owners: [] }));
             
+            if (!session.items) {
+                session.items = [];
+            }
+            
+            const startIdx = session.items.length;
+            session.items.push(...newItems);
+            session.receiptCount = (session.receiptCount || 0) + 1;
+            
+            if (session.receiptCount === 1) {
+                session.state = 'AWAITING_PARTICIPANTS';
+                await reply(msg, `Found ${items.length} items! 🎉\n\nWho is sharing this bill? Send a comma-separated list of names (e.g., Alice, Bob, Charlie).`);
+            } else {
+                session.currentItemIndex = startIdx;
+                session.state = 'ASSIGNING_OWNERS';
+                await askForOwners(msg, session, from);
+            }
         } 
         else if (session.state === 'AWAITING_PARTICIPANTS') {
             session.participants = text.split(',').map(n => n.trim());
@@ -278,12 +430,6 @@ async function handleSplitBill(msg, userName, from, text) {
             await askForOwners(msg, session, from);
         } 
         else if (session.state === 'ASSIGNING_OWNERS') {
-            if (text === 'cancel') {
-                delete sessions[from];
-                await reply(msg, "Cancelled split bill.");
-                return;
-            }
-            
             const item = session.items[session.currentItemIndex];
             const ownerIndexes = text.split(/\s+/).map(n => parseInt(n, 10) - 1);
             
@@ -301,15 +447,44 @@ async function handleSplitBill(msg, userName, from, text) {
             
             session.currentItemIndex++;
             if (session.currentItemIndex >= session.items.length) {
-                await calculateSplitBill(msg, session, userName, from);
+                session.state = 'AWAITING_MORE_RECEIPTS';
+                await reply(msg, "All items for this receipt have been assigned! 🧾\n\nDo you want to add another receipt to this split session?\n- Upload another photo of a receipt.\n- Or reply 'no' / 'done' to proceed to payment.");
             } else {
                 await askForOwners(msg, session, from);
             }
         }
+        else if (session.state === 'AWAITING_MORE_RECEIPTS') {
+            if (text === 'no' || text === 'done') {
+                session.state = 'AWAITING_PAYERS';
+                const totalBill = session.items.reduce((sum, item) => sum + item.price, 0);
+                let prompt = `The total bill is *Rp ${totalBill.toLocaleString('id-ID')}*.\n\nWho paid for this bill?\n\n`;
+                prompt += `Reply with:\n`;
+                prompt += `- A number from the participant list:\n`;
+                session.participants.forEach((p, idx) => {
+                    prompt += `  ${idx + 1}. ${p}\n`;
+                });
+                prompt += `- Any other name not in the list (e.g. David)\n`;
+                prompt += `- Multiple payers with amounts (e.g. Alice 100k, Bob 50k)\n`;
+                prompt += `- Or type 'me' to default to you (${userName}).`;
+                await reply(msg, prompt);
+            } else {
+                await reply(msg, "Please upload another photo of the receipt, or reply 'no'/'done' to proceed to payment.");
+            }
+        }
+        else if (session.state === 'AWAITING_PAYERS') {
+            const totalBill = session.items.reduce((sum, item) => sum + item.price, 0);
+            const payers = parsePayers(text, session.participants, totalBill, userName);
+            
+            if (!payers || payers.length === 0) {
+                await reply(msg, "Sorry, I couldn't understand that. Please specify who paid (e.g. '1' or 'Alice 100k, Bob 50k').");
+                return;
+            }
+            
+            await calculateSplitBill(msg, session, userName, from, payers);
+        }
     } catch (e) {
         console.error("Gemini/SplitBill Error:", e);
-        await reply(msg, "Sorry, I couldn't read the receipt clearly. Please type 'cancel' to exit, or upload a clearer photo.");
-        if (text === 'cancel') delete sessions[from];
+        await reply(msg, "Sorry, I couldn't process the request. Please type 'cancel' to exit, or try again.");
     }
 }
 
@@ -593,7 +768,7 @@ async function startWhatsAppBot() {
                 await reply(msg, res);
             }
             else if (command === '/splitbill') {
-                sessions[from] = { state: 'AWAITING_RECEIPT' };
+                sessions[from] = { state: 'AWAITING_RECEIPT', items: [], receiptCount: 0 };
                 await reply(msg, "Alright! Send me a photo of the receipt to get started.");
             }
         } catch (e) {
