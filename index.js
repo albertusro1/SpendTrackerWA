@@ -262,6 +262,56 @@ async function calculateSplitBill(msg, session, userName, from) {
     delete sessions[from];
 }
 
+function parseLocalTextItems(text) {
+    const lines = text.split(/[\n,]+/);
+    const parsedItems = [];
+    
+    for (let line of lines) {
+        line = line.trim();
+        if (!line) continue;
+        
+        let cleaned = line.replace(/^(rp\.?|rp\s*)/i, '').trim();
+        cleaned = cleaned.replace(/(rp\.?|rp\s*)$/i, '').trim();
+        
+        const match = cleaned.match(/^(.+?)(?:\s+|:\s*|-\s*|rp\s*|rp\.\s*)(\d+(?:[\.,]\d{3})*)\s*(k|rb|ribu|juta|jt)?$/i);
+        if (match) {
+            const name = match[1].trim().replace(/^[:\-\s]+|[:\-\s]+$/g, '').trim();
+            
+            // Check word count and conversational keywords
+            const nameWords = name.split(/\s+/);
+            if (nameWords.length > 4) return null; // Fall back to LLM for long sentences
+            
+            const conversationalKeywords = ['bought', 'spent', 'paid', 'was', 'for', 'yesterday', 'kemarin', 'habis', 'tadi', 'bayar', 'spend', 'beli'];
+            if (nameWords.some(w => conversationalKeywords.includes(w.toLowerCase()))) {
+                return null; // Fall back to LLM
+            }
+            
+            let priceStr = match[2].replace(/[\.,]/g, '');
+            let price = parseInt(priceStr, 10);
+            
+            if (match[3]) {
+                const mult = match[3].toLowerCase();
+                if (['k', 'rb', 'ribu'].includes(mult)) {
+                    price *= 1000;
+                } else if (['juta', 'jt'].includes(mult)) {
+                    price *= 1000000;
+                }
+            }
+            
+            if (name && !isNaN(price)) {
+                parsedItems.push({ name, price });
+            }
+        } else {
+            return null; // Fall back to LLM if any line is not simple format
+        }
+    }
+    
+    if (parsedItems.length > 0 && parsedItems.length === lines.filter(l => l.trim()).length) {
+        return parsedItems;
+    }
+    return null;
+}
+
 async function handleSplitBill(msg, userName, from, text) {
     const session = sessions[from];
     
@@ -418,81 +468,91 @@ async function handleSplitBill(msg, userName, from, text) {
                 }
             } else {
                 // Text receipt input
-                await reply(msg, "Parsing your items text... 🤖");
-                const openRouterKey = process.env.OPENROUTER_API_KEY;
-                const prompt = "Extract all line items, services, products, or charges from the following text description. Return a JSON array where each object has 'name' (string) and 'price' (number). Convert price shorthand notations like 'k', 'K', 'rb', 'ribu' to their full numeric values (e.g. 163k or 163K becomes 163000, 50k becomes 50000). Do not include tax, service charge, grand total, or subtotal, only the individual items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nInput text:\n" + text;
-
-                if (openRouterKey) {
-                    console.log("Using OpenRouter for text items parsing...");
-                    const modelsToTry = [
-                        "meta-llama/llama-3.3-70b-instruct:free",
-                        "google/gemma-4-31b-it:free",
-                        "nex-agi/nex-n2-pro:free",
-                        "openrouter/free"
-                    ];
-
-                    let success = false;
-                    let lastError = null;
-
-                    for (const modelName of modelsToTry) {
-                        let timeoutId;
-                        try {
-                            const controller = new AbortController();
-                            timeoutId = setTimeout(() => controller.abort(), 20000);
-
-                            const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                                method: "POST",
-                                headers: {
-                                    "Authorization": `Bearer ${openRouterKey}`,
-                                    "Content-Type": "application/json",
-                                    "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
-                                },
-                                signal: controller.signal,
-                                body: JSON.stringify({
-                                    model: modelName,
-                                    messages: [
-                                        {
-                                            role: "user",
-                                            content: prompt
-                                        }
-                                    ]
-                                })
-                            });
-
-                            clearTimeout(timeoutId);
-
-                            if (!response.ok) {
-                                const errText = await response.text();
-                                throw new Error(`Status ${response.status} - ${errText}`);
-                            }
-
-                            const data = await response.json();
-                            if (!data.choices || data.choices.length === 0) {
-                                throw new Error("No choices returned from OpenRouter");
-                            }
-
-                            const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                            items = JSON.parse(responseText);
-                            success = true;
-                            break;
-                        } catch (err) {
-                            if (timeoutId) clearTimeout(timeoutId);
-                            lastError = err;
-                        }
-                    }
-
-                    if (!success) {
-                        throw new Error(`All OpenRouter models failed. Last error: ${lastError ? lastError.message : 'Unknown error'}`);
-                    }
+                // First try to parse locally using the regex parser
+                items = parseLocalTextItems(text);
+                
+                if (items) {
+                    console.log("Parsed items locally via regex:", JSON.stringify(items));
                 } else {
-                    console.log("Using direct Gemini API for text items parsing...");
-                    if (!genAI) {
-                        throw new Error("GEMINI_API_KEY is not configured in your .env file.");
+                    // If local parser fails, fall back to LLM
+                    await reply(msg, "Parsing your items text... 🤖");
+                    const openRouterKey = process.env.OPENROUTER_API_KEY;
+                    const prompt = "Extract all line items, services, products, or charges from the following text description. Return a JSON array where each object has 'name' (string) and 'price' (number). Convert price shorthand notations like 'k', 'K', 'rb', 'ribu' to their full numeric values (e.g. 163k or 163K becomes 163000, 50k becomes 50000). Do not include tax, service charge, grand total, or subtotal if individual itemized list is present. If the text describes only a single expense, charge, or service without sub-items (e.g., 'Lapangan Badminton 163K'), treat that single charge as the line item. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nInput text:\n" + text;
+
+                    if (openRouterKey) {
+                        console.log("Using OpenRouter for text items parsing...");
+                        const modelsToTry = [
+                            "meta-llama/llama-3.3-70b-instruct:free",
+                            "google/gemma-4-31b-it:free",
+                            "nex-agi/nex-n2-pro:free",
+                            "openrouter/free"
+                        ];
+
+                        let success = false;
+                        let lastError = null;
+
+                        for (const modelName of modelsToTry) {
+                            let timeoutId;
+                            try {
+                                console.log(`Trying OpenRouter model for text parsing: ${modelName}`);
+                                const controller = new AbortController();
+                                timeoutId = setTimeout(() => controller.abort(), 20000);
+
+                                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                                    method: "POST",
+                                    headers: {
+                                        "Authorization": `Bearer ${openRouterKey}`,
+                                        "Content-Type": "application/json",
+                                        "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
+                                    },
+                                    signal: controller.signal,
+                                    body: JSON.stringify({
+                                        model: modelName,
+                                        messages: [
+                                            {
+                                                role: "user",
+                                                content: prompt
+                                            }
+                                        ]
+                                    })
+                                });
+
+                                clearTimeout(timeoutId);
+
+                                if (!response.ok) {
+                                    const errText = await response.text();
+                                    throw new Error(`Status ${response.status} - ${errText}`);
+                                }
+
+                                const data = await response.json();
+                                if (!data.choices || data.choices.length === 0) {
+                                    throw new Error("No choices returned from OpenRouter");
+                                }
+
+                                const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
+                                items = JSON.parse(responseText);
+                                success = true;
+                                break;
+                            } catch (err) {
+                                if (timeoutId) clearTimeout(timeoutId);
+                                console.warn(`Failed with model ${modelName} for text parsing:`, err.message);
+                                lastError = err;
+                            }
+                        }
+
+                        if (!success) {
+                            throw new Error(`All OpenRouter models failed. Last error: ${lastError ? lastError.message : 'Unknown error'}`);
+                        }
+                    } else {
+                        console.log("Using direct Gemini API for text items parsing...");
+                        if (!genAI) {
+                            throw new Error("GEMINI_API_KEY is not configured in your .env file.");
+                        }
+                        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+                        const result = await model.generateContent(prompt);
+                        const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
+                        items = JSON.parse(responseText);
                     }
-                    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                    const result = await model.generateContent(prompt);
-                    const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                    items = JSON.parse(responseText);
                 }
             }
 
@@ -897,7 +957,7 @@ async function startWhatsAppBot() {
                 
                 await reply(msg, res);
             }
-            else if (command === '/splitbill') {
+            else if (command === '/splitbill' || command === '/spltbill' || command === '/sb') {
                 sessions[from] = { state: 'AWAITING_RECEIPT' };
                 if (argsText) {
                     await handleSplitBill(msg, userName, from, argsText);
