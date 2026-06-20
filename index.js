@@ -108,9 +108,10 @@ async function reply(msg, textOrMedia, options = {}) {
 }
 
 async function askForOwners(msg, session, from) {
-    const item = session.items[session.currentItemIndex];
+    const receipt = session.receipts[session.currentReceiptIndex];
+    const item = receipt.items[session.currentItemIndex];
     let prompt = `Who shared the *${item.name}* (Rp ${item.price.toLocaleString('id-ID')})?\n\nReply with numbers:\n`;
-    session.participants.forEach((p, idx) => {
+    receipt.participants.forEach((p, idx) => {
         prompt += `${idx + 1}. ${p}\n`;
     });
     await reply(msg, prompt);
@@ -168,25 +169,33 @@ function parsePayers(text, participants, totalBill, userName) {
     return results;
 }
 
-async function calculateSplitBill(msg, session, userName, from, payers) {
-    const totalBill = session.items.reduce((sum, item) => sum + item.price, 0);
+async function calculateSplitBill(msg, session, userName, from) {
+    const allParticipants = new Set();
+    session.receipts.forEach(r => {
+        r.participants.forEach(p => allParticipants.add(p));
+    });
     
     const consumptions = {};
-    session.participants.forEach(p => consumptions[p] = 0);
+    allParticipants.forEach(p => consumptions[p] = 0);
     
-    session.items.forEach(item => {
-        const perPerson = item.price / item.owners.length;
-        item.owners.forEach(o => {
-            consumptions[o] = (consumptions[o] || 0) + perPerson;
+    session.receipts.forEach(r => {
+        r.items.forEach(item => {
+            if (item.owners.length === 0) return;
+            const perPerson = item.price / item.owners.length;
+            item.owners.forEach(o => {
+                consumptions[o] = (consumptions[o] || 0) + perPerson;
+            });
         });
     });
     
     const payments = {};
-    payers.forEach(p => {
-        payments[p.name] = (payments[p.name] || 0) + p.amount;
+    session.receipts.forEach(r => {
+        r.payers.forEach(p => {
+            payments[p.name] = (payments[p.name] || 0) + p.amount;
+        });
     });
     
-    const allNames = new Set([...Object.keys(consumptions), ...Object.keys(payments)]);
+    const allNames = new Set([...allParticipants, ...Object.keys(payments)]);
     const balances = {};
     allNames.forEach(name => {
         const cons = consumptions[name] || 0;
@@ -228,19 +237,17 @@ async function calculateSplitBill(msg, session, userName, from, payers) {
     
     let report = `🧾 *Split Bill Summary*\n━━━━━━━━━━━━━━━━━━━━\n\n`;
     
-    report += `*Items List:*\n`;
-    session.items.forEach((item, idx) => {
-        report += `${idx + 1}. ${item.name} (Rp ${item.price.toLocaleString('id-ID')}) — ${item.owners.join(', ')}\n`;
+    session.receipts.forEach((r, rIdx) => {
+        const total = r.items.reduce((s, i) => s + i.price, 0);
+        report += `*Bill ${rIdx + 1} (Total: Rp ${total.toLocaleString('id-ID')}):*\n`;
+        r.items.forEach((item, idx) => {
+            report += `  - ${item.name} (Rp ${item.price.toLocaleString('id-ID')}) — ${item.owners.join(', ')}\n`;
+        });
+        report += `  _Payer(s):_ ${r.payers.map(p => `${p.name} (Rp ${Math.round(p.amount).toLocaleString('id-ID')})`).join(', ')}\n\n`;
     });
-    report += `\n*Total Bill:* Rp ${totalBill.toLocaleString('id-ID')}\n\n`;
     
-    report += `*Payments:*\n`;
-    for (const [name, pay] of Object.entries(payments)) {
-        if (pay > 0) {
-            report += `- ${name} paid Rp ${Math.round(pay).toLocaleString('id-ID')}\n`;
-        }
-    }
-    report += `\n`;
+    const grandTotal = session.receipts.reduce((sum, r) => sum + r.items.reduce((s, i) => s + i.price, 0), 0);
+    report += `*Grand Total:* Rp ${grandTotal.toLocaleString('id-ID')}\n━━━━━━━━━━━━━━━━━━━━\n\n`;
     
     report += `*Settlements (Who owes who):*\n`;
     if (settlements.length === 0) {
@@ -272,11 +279,15 @@ async function handleSplitBill(msg, userName, from, text) {
                 if (session.state === 'AWAITING_MORE_RECEIPTS') {
                     if (text === 'no' || text === 'done') {
                         session.state = 'AWAITING_PAYERS';
-                        const totalBill = session.items.reduce((sum, item) => sum + item.price, 0);
-                        let prompt = `The total bill is *Rp ${totalBill.toLocaleString('id-ID')}*.\n\nWho paid for this bill?\n\n`;
+                        session.currentReceiptPayerIndex = 0;
+                        
+                        const currentReceipt = session.receipts[0];
+                        const total = currentReceipt.items.reduce((s, i) => s + i.price, 0);
+                        let prompt = `*Payer Details Required* 🧾\n\n`;
+                        prompt += `Who paid for *Bill 1* (Total: Rp ${total.toLocaleString('id-ID')})?\n\n`;
                         prompt += `Reply with:\n`;
-                        prompt += `- A number from the participant list:\n`;
-                        session.participants.forEach((p, idx) => {
+                        prompt += `- A participant number:\n`;
+                        currentReceipt.participants.forEach((p, idx) => {
                             prompt += `  ${idx + 1}. ${p}\n`;
                         });
                         prompt += `- Any other name not in the list (e.g. David)\n`;
@@ -405,50 +416,52 @@ async function handleSplitBill(msg, userName, from, text) {
             
             const newItems = items.map(item => ({ name: item.name, price: item.price, owners: [] }));
             
-            if (!session.items) {
-                session.items = [];
+            if (!session.receipts) {
+                session.receipts = [];
             }
             
-            const startIdx = session.items.length;
-            session.items.push(...newItems);
-            session.receiptCount = (session.receiptCount || 0) + 1;
+            const newReceipt = {
+                items: newItems,
+                participants: [],
+                payers: []
+            };
             
-            if (session.receiptCount === 1) {
-                session.state = 'AWAITING_PARTICIPANTS';
-                await reply(msg, `Found ${items.length} items! 🎉\n\nWho is sharing this bill? Send a comma-separated list of names (e.g., Alice, Bob, Charlie).`);
-            } else {
-                session.currentItemIndex = startIdx;
-                session.state = 'ASSIGNING_OWNERS';
-                await askForOwners(msg, session, from);
-            }
+            session.receipts.push(newReceipt);
+            session.currentReceiptIndex = session.receipts.length - 1;
+            
+            session.state = 'AWAITING_PARTICIPANTS';
+            await reply(msg, `Found ${items.length} items for Bill ${session.receipts.length}! 🎉\n\nWho is sharing this bill? Send a comma-separated list of names (e.g., Alice, Bob, Charlie).`);
         } 
         else if (session.state === 'AWAITING_PARTICIPANTS') {
-            session.participants = text.split(',').map(n => n.trim());
+            const receipt = session.receipts[session.currentReceiptIndex];
+            receipt.participants = text.split(',').map(n => n.trim());
             session.currentItemIndex = 0;
             session.state = 'ASSIGNING_OWNERS';
             
             await askForOwners(msg, session, from);
         } 
         else if (session.state === 'ASSIGNING_OWNERS') {
-            const item = session.items[session.currentItemIndex];
-            const ownerIndexes = text.split(/\s+/).map(n => parseInt(n, 10) - 1);
+            const receipt = session.receipts[session.currentReceiptIndex];
+            const item = receipt.items[session.currentItemIndex];
+            
+            const ownerIndexes = text.split(/[\s,]+/).map(n => parseInt(n.trim(), 10) - 1);
             
             let validOwners = [];
             ownerIndexes.forEach(idx => {
-                if (session.participants[idx]) validOwners.push(session.participants[idx]);
+                if (receipt.participants[idx]) validOwners.push(receipt.participants[idx]);
             });
             
             if (validOwners.length === 0) {
-                await reply(msg, `Please reply with valid numbers from the list (e.g. '1 2').`);
+                await reply(msg, `Please reply with valid numbers from the list (e.g. '1, 2').`);
                 return;
             }
             
             item.owners = validOwners;
             
             session.currentItemIndex++;
-            if (session.currentItemIndex >= session.items.length) {
+            if (session.currentItemIndex >= receipt.items.length) {
                 session.state = 'AWAITING_MORE_RECEIPTS';
-                await reply(msg, "All items for this receipt have been assigned! 🧾\n\nDo you want to add another receipt to this split session?\n- Upload another photo of a receipt.\n- Or reply 'no' / 'done' to proceed to payment.");
+                await reply(msg, `All items for Bill ${session.receipts.length} have been assigned! 🧾\n\nDo you want to add another receipt to this split session?\n- Upload another photo of a receipt.\n- Or reply 'no' / 'done' to proceed to payment.`);
             } else {
                 await askForOwners(msg, session, from);
             }
@@ -456,11 +469,15 @@ async function handleSplitBill(msg, userName, from, text) {
         else if (session.state === 'AWAITING_MORE_RECEIPTS') {
             if (text === 'no' || text === 'done') {
                 session.state = 'AWAITING_PAYERS';
-                const totalBill = session.items.reduce((sum, item) => sum + item.price, 0);
-                let prompt = `The total bill is *Rp ${totalBill.toLocaleString('id-ID')}*.\n\nWho paid for this bill?\n\n`;
+                session.currentReceiptPayerIndex = 0;
+                
+                const currentReceipt = session.receipts[0];
+                const total = currentReceipt.items.reduce((s, i) => s + i.price, 0);
+                let prompt = `*Payer Details Required* 🧾\n\n`;
+                prompt += `Who paid for *Bill 1* (Total: Rp ${total.toLocaleString('id-ID')})?\n\n`;
                 prompt += `Reply with:\n`;
-                prompt += `- A number from the participant list:\n`;
-                session.participants.forEach((p, idx) => {
+                prompt += `- A participant number:\n`;
+                currentReceipt.participants.forEach((p, idx) => {
                     prompt += `  ${idx + 1}. ${p}\n`;
                 });
                 prompt += `- Any other name not in the list (e.g. David)\n`;
@@ -472,15 +489,36 @@ async function handleSplitBill(msg, userName, from, text) {
             }
         }
         else if (session.state === 'AWAITING_PAYERS') {
-            const totalBill = session.items.reduce((sum, item) => sum + item.price, 0);
-            const payers = parsePayers(text, session.participants, totalBill, userName);
+            const currentReceipt = session.receipts[session.currentReceiptPayerIndex];
+            const currentTotal = currentReceipt.items.reduce((s, i) => s + i.price, 0);
+            
+            const payers = parsePayers(text, currentReceipt.participants, currentTotal, userName);
             
             if (!payers || payers.length === 0) {
                 await reply(msg, "Sorry, I couldn't understand that. Please specify who paid (e.g. '1' or 'Alice 100k, Bob 50k').");
                 return;
             }
             
-            await calculateSplitBill(msg, session, userName, from, payers);
+            currentReceipt.payers = payers;
+            
+            session.currentReceiptPayerIndex++;
+            if (session.currentReceiptPayerIndex < session.receipts.length) {
+                const nextReceipt = session.receipts[session.currentReceiptPayerIndex];
+                const nextTotal = nextReceipt.items.reduce((s, i) => s + i.price, 0);
+                
+                let prompt = `Who paid for *Bill ${session.currentReceiptPayerIndex + 1}* (Total: Rp ${nextTotal.toLocaleString('id-ID')})?\n\n`;
+                prompt += `Reply with:\n`;
+                prompt += `- A participant number:\n`;
+                nextReceipt.participants.forEach((p, idx) => {
+                    prompt += `  ${idx + 1}. ${p}\n`;
+                });
+                prompt += `- Any other name not in the list (e.g. David)\n`;
+                prompt += `- Multiple payers with amounts (e.g. Alice 100k, Bob 50k)\n`;
+                prompt += `- Or type 'me' to default to you (${userName}).`;
+                await reply(msg, prompt);
+            } else {
+                await calculateSplitBill(msg, session, userName, from);
+            }
         }
     } catch (e) {
         console.error("Gemini/SplitBill Error:", e);
