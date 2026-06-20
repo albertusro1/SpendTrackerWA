@@ -940,42 +940,117 @@ async function startWhatsAppBot() {
                         'makan', 'minum', 'kopi', 'nasi', 'ayam', 'bakso', 'sate', 'soto',
                         'rendang', 'gudeg', 'rawon', 'pecel', 'tempe', 'tahu', 'sambal',
                         'es teh', 'es jeruk', 'jus', 'susu', 'roti', 'kue', 'gorengan', 'martabak',
-                        'gofood', 'grabfood', 'mcd', 'kfc', 'starbucks', 'chatime', 'warung',
-                        'food', 'eat', 'lunch', 'dinner', 'breakfast', 'brunch', 'snack',
+                        'gofood', 'grabfood', 'shopeefood', 'mcd', 'kfc', 'starbucks', 'chatime',
+                        'warung', 'food', 'eat', 'lunch', 'dinner', 'breakfast', 'brunch', 'snack',
                         'coffee', 'tea', 'juice', 'milk', 'bread', 'cake', 'pizza', 'burger',
                         'rice', 'noodle', 'pasta', 'chicken', 'beef', 'fish', 'salad',
                         'restaurant', 'cafe', 'bistro', 'dine', 'meal', 'dessert', 'ice cream',
                         'boba', 'matcha', 'latte', 'espresso', 'americano', 'croissant',
                         'sandwich', 'wrap', 'sushi', 'ramen', 'donut', 'waffle', 'pancake',
                         'salt', 'chocolate', 'cookie', 'pastry', 'fries', 'padang',
+                        'gacoan', 'solaria', 'richeese', 'baba rafi', 'jco', 'j.co', 'bakmi gm',
+                        'cfc', 'marugame', 'udon', 'yoshinoya', 'sushi tei', 'kopi kenangan',
+                        'janji jiwa', 'fore coffee', 'excelso', 'mixue', 'tealive', 'dum dum',
+                        'koi the', 'koi thé', 'shaburi', 'kintan', 'holy cow', 'holycow',
+                        'burger king', 'bk', 'pizza hut', 'ph', 'dominos', 'domino\'s',
+                        'aw restaurant', 'a&w', 'mako cake', 'breadtalk', 'tous les jours',
+                        'harvest cake', 'sour sally', 'kebab', 'warmindo', 'angkringan',
+                        'pecel lele', 'soto betawi', 'martabak pecennongan', 'kopi nako',
+                        'kopimana', 'ta wan', 'tawan', 'imperial kitchen', 'dimsum',
+                        'd\'cost', 'dcost', 'hokben', 'hoka hoka bento', 'pepper lunch',
+                        'sushi go', 'sushigo', 'genki sushi', 'gindaco', 'rejuve', 're.juve',
+                        'boost juice', 'kopi toko djawa', 'anomali'
                     ],
                     'Groceries': [
                         'supermarket', 'indomaret', 'alfamart', 'hypermart', 'aeon',
                         'sayur', 'buah', 'bumbu', 'sabun', 'shampo', 'tissue',
                         'grocery', 'market', 'store', 'mart', 'vegetable', 'fruit',
+                        'alfamidi', 'midi', 'superindo', 'super indo', 'carrefour', 'transmart',
+                        'giant', 'hero supermarket', 'lotte mart', 'lottemart', 'lotte grosir',
+                        'farmers market', 'ranch market', 'the foodhall', 'foodhall',
+                        'grand lucky', 'grandlucky', 'sayurbox', 'tanihub', 'kebut',
+                        'papaya fresh', 'toko kelontong', 'pasar', 'sembako', 'beras',
+                        'minyak goreng', 'telur', 'gula', 'garam', 'deterjen', 'pewangi',
+                        'pasta gigi', 'odol', 'sikat gigi', 'shampoo'
                     ],
                     'Transportation': [
                         'bensin', 'grab', 'gojek', 'tol', 'parkir', 'pertamax',
                         'taxi', 'uber', 'gas', 'fuel', 'train', 'bus', 'mrt',
                         'ojek', 'transjakarta', 'commuter', 'travel', 'toll',
+                        'gocar', 'goride', 'grabcar', 'grabbike', 'maxim', 'indrive',
+                        'lrt', 'krl', 'commuterline', 'kereta', 'kai', 'damri',
+                        'pertalite', 'pertamax turbo', 'dexlite', 'pertamina dex',
+                        'pertamina', 'shell', 'shell super', 'v-power', 'bp fuel',
+                        'bp-akr', 'emoney', 'e-money', 'flazz', 'brizzi', 'tapcash',
+                        'e-toll', 'etoll', 'linkaja', 'ovo', 'dana', 'gopay',
+                        'astrapay', 'bluebird', 'blue bird', 'garuda', 'citilink',
+                        'lion air', 'batik air', 'sriwijaya', 'airasia', 'traveloka',
+                        'tiket.com', 'kai access', 'go-ride', 'go-car'
                     ],
                     'Utilities': [
                         'listrik', 'token', 'internet', 'pulsa', 'air', 'pdam',
                         'electric', 'water', 'phone', 'wifi', 'bill', 'subscription',
+                        'pln', 'telkomsel', 'indosat', 'im3', 'xl', 'tri', '3',
+                        'smartfren', 'axis', 'byu', 'by.u', 'indihome', 'first media',
+                        'firstmedia', 'biznet', 'myrepublic', 'cbn', 'mnc play', 'telkom',
+                        'pascabayar', 'postpaid', 'prabayar', 'prepaid', 'gas alam', 'pgn'
+                    ],
+                    'Bills': [
+                        'tagihan', 'bpjs', 'asuransi', 'pajak', 'tax', 'sewa', 'kost', 'kos',
+                        'rent', 'kontrakan', 'subscription', 'langganan', 'credit card', 'cc',
+                        'pinjol', 'cicilan', 'leasing'
+                    ],
+                    'Sport & Hobbies': [
+                        'badminton', 'futsal', 'gym', 'court', 'sewa lapangan', 'racket', 'raket',
+                        'tenis', 'tennis', 'running', 'lari', 'gowes', 'sepeda', 'renang',
+                        'swimming', 'fitness', 'yoga', 'pilates', 'golf', 'climbing', 'hiking',
+                        'ticket', 'tiket konser', 'event'
                     ],
                     'Shopping': [
                         'baju', 'celana', 'sepatu', 'tas', 'jam', 'aksesori',
                         'clothes', 'shoes', 'bag', 'watch', 'shirt', 'pants',
                         'dress', 'fashion', 'shopee', 'tokopedia', 'lazada',
+                        'tokped', 'blibli', 'bukalapak', 'tiktok shop', 'tiktokshop',
+                        'uniqlo', 'zara', 'h&m', 'pull&bear', 'pull and bear', 'adidas',
+                        'nike', 'puma', 'decathlon', 'map club', 'sogo', 'metro',
+                        'seibu', 'central dept', 'galeries lafayette', 'sarinah',
+                        'matahari', 'ramayana', 'miniso', 'kkv', 'sociolla',
+                        'ikea', 'informa', 'ace hardware', 'ace', 'hardware',
+                        'guardian', 'watsons', 'watson', 'century', 'shopee mall'
                     ],
                     'Health': [
                         'obat', 'dokter', 'rumah sakit', 'apotek', 'vitamin',
                         'medicine', 'doctor', 'hospital', 'pharmacy', 'clinic', 'gym',
+                        'kimia farma', 'k24', 'k-24', 'roxy', 'viva health', 'halodoc',
+                        'alodokter', 'bpjs kesehatan', 'celebrity fitness', 'celfit',
+                        'fitness first', 'golds gym', 'gold\'s gym', 'fithub', 'fit hub',
+                        'megaclinic', 'prodia', 'lab', 'laboratorium', 'klinik', 'puskesmas',
+                        'suplemen', 'masker', 'hand sanitizer'
                     ],
                     'Entertainment': [
                         'bioskop', 'film', 'game', 'netflix', 'spotify', 'youtube',
                         'movie', 'cinema', 'concert', 'ticket', 'karaoke',
+                        'xxi', 'cgv', 'cinepolis', 'disney+', 'hotstar', 'hbo',
+                        'prime video', 'viu', 'iqiyi', 'wetv', 'vidio', 'steam',
+                        'playstation', 'nintendo', 'roblox', 'mobile legends', 'mlbb',
+                        'pubg', 'genshin', 'valheim', 'minecraft', 'top up game',
+                        'timezone', 'dufan', 'ancol', 'taman safari', 'klook',
+                        'konser', 'tiket konser', 'karaoke family'
                     ],
+                    'Investment & Savings': [
+                        'reksadana', 'saham', 'emas', 'crypto', 'bitcoin', 'tabungan',
+                        'invest', 'bibit', 'bareksa', 'ajaib', 'binance', 'tokocrypto',
+                        'depo', 'deposito'
+                    ],
+                    'Education': [
+                        'buku', 'kursus', 'spp', 'kuliah', 'sekolah', 'course', 'udemy',
+                        'coursera', 'bootcamp', 'seminar', 'training', 'biaya sekolah',
+                        'lks', 'ujian'
+                    ],
+                    'Donation & Charity': [
+                        'zakat', 'sedekah', 'infak', 'sumbangan', 'perpuluhan', 'tithe',
+                        'donasi', 'charity', 'tips', 'tip', 'parkir liar'
+                    ]
                 };
                 let category = 'Miscellaneous';
                 const searchText = argsText.toLowerCase();
@@ -986,7 +1061,21 @@ async function startWhatsAppBot() {
                 }
 
                 await logUserExpense(userName, amount, description, category, customDate);
-                const catEmojis = { 'Food & Beverage': '🍔', 'Groceries': '🛒', 'Transportation': '🚗', 'Utilities': '⚡', 'Shopping': '🛍️', 'Health': '💊', 'Entertainment': '🎬', 'Miscellaneous': '📦' };
+                const catEmojis = { 
+                    'Food & Beverage': '🍔', 
+                    'Groceries': '🛒', 
+                    'Transportation': '🚗', 
+                    'Utilities': '⚡', 
+                    'Bills': '🧾',
+                    'Sport & Hobbies': '🏸',
+                    'Shopping': '🛍️', 
+                    'Health': '💊', 
+                    'Entertainment': '🎬', 
+                    'Investment & Savings': '📈',
+                    'Education': '📚',
+                    'Donation & Charity': '🤝',
+                    'Miscellaneous': '📦' 
+                };
                 await reply(msg, `✅ *Recorded!*\n\n📝 ${description}\n${catEmojis[category] || '📦'} ${category}\n💰 Rp ${amount.toLocaleString('id-ID')}\n📅 ${customDate || 'Today'}`);
             }
             else if (command === '/summary') {
@@ -1045,7 +1134,21 @@ async function startWhatsAppBot() {
                     return;
                 }
                 
-                const catEmojis = { 'Food & Beverage': '🍔', 'Groceries': '🛒', 'Transportation': '🚗', 'Utilities': '⚡', 'Shopping': '🛍️', 'Health': '💊', 'Entertainment': '🎬', 'Miscellaneous': '📦' };
+                const catEmojis = { 
+                    'Food & Beverage': '🍔', 
+                    'Groceries': '🛒', 
+                    'Transportation': '🚗', 
+                    'Utilities': '⚡', 
+                    'Bills': '🧾',
+                    'Sport & Hobbies': '🏸',
+                    'Shopping': '🛍️', 
+                    'Health': '💊', 
+                    'Entertainment': '🎬', 
+                    'Investment & Savings': '📈',
+                    'Education': '📚',
+                    'Donation & Charity': '🤝',
+                    'Miscellaneous': '📦' 
+                };
                 
                 let res = `📊 *Summary — ${filterLabel} (${dateStr})*\n`;
                 res += `━━━━━━━━━━━━━━━━━━━━━━\n`;
