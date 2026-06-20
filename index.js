@@ -5,6 +5,8 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 const fs = require('fs');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const moment = require('moment');
+const cron = require('node-cron');
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const ADMIN_NUMBER = (process.env.ADMIN_NUMBER || '').trim();
@@ -783,6 +785,492 @@ async function handleSplitBill(msg, userName, from, text) {
     }
 }
 
+const CAT_EMOJIS = { 
+    'Food & Beverage': '🍔', 
+    'Groceries': '🛒', 
+    'Transportation': '🚗', 
+    'Utilities': '⚡', 
+    'Bills': '🧾',
+    'Sport & Hobbies': '🏸',
+    'Shopping': '🛍️', 
+    'Health': '💊', 
+    'Entertainment': '🎬', 
+    'Investment & Savings': '📈',
+    'Education': '📚',
+    'Donation & Charity': '🤝',
+    'Miscellaneous': '📦' 
+};
+
+const BPS_BENCHMARKS = {
+    'Food & Beverage': 25,
+    'Groceries': 20,
+    'Transportation': 15,
+    'Utilities': 10,
+    'Bills': 10,
+    'Shopping': 10,
+    'Entertainment': 5,
+    'Miscellaneous': 5
+};
+
+const LEAK_KEYWORDS = [
+    'coffee', 'kopi', 'snacks', 'snack', 'camilan', 'jajan',
+    'boba', 'parking', 'parkir', 'game', 'top up', 'topup',
+    'cigarette', 'rokok', 'gojek', 'grab', 'ojek', 'matcha',
+    'ice cream', 'es krim', 'biscuit', 'biskuit', 'candy', 'permen'
+];
+
+async function generateReportForUser(userName, timeframe) {
+    if (!doc) await initGoogleSheets();
+    const sheet = doc.sheetsByTitle[userName];
+    if (!sheet) {
+        return `📊 *Summary — ${timeframe.toUpperCase()}*\n━━━━━━━━━━━━━━━━━\n\nNo expenses logged yet! Use \`/log [amount] [description]\` to start tracking.`;
+    }
+    
+    const rows = await sheet.getRows();
+    const now = moment().utcOffset('+07:00');
+    const dateStr = now.format('D MMM YYYY');
+    
+    let filterLabel = 'Today';
+    let filterType = 'daily';
+    
+    const normalizedTimeframe = (timeframe || 'td').toLowerCase().trim();
+    if (normalizedTimeframe === 'wtd' || normalizedTimeframe === 'week') {
+        filterLabel = 'This Week';
+        filterType = 'weekly';
+    } else if (normalizedTimeframe === 'mtd' || normalizedTimeframe === 'month') {
+        filterLabel = 'Month to Date';
+        filterType = 'monthly';
+    } else if (normalizedTimeframe === 'all') {
+        filterLabel = 'All Time';
+        filterType = 'all';
+    }
+
+    const mtdTransactions = [];
+    const pmtdTransactions = [];
+    const filteredTransactions = [];
+    
+    const prevMonthStart = now.clone().subtract(1, 'month').startOf('month');
+    const prevMonthSameDayEnd = now.clone().subtract(1, 'month').endOf('day');
+    
+    const startOfWeek = now.clone().startOf('isoWeek');
+    const endOfWeek = now.clone().endOf('isoWeek');
+    
+    rows.forEach(r => {
+        const amt = parseFloat(r.get('Amount'));
+        if (isNaN(amt)) return;
+        
+        const timestampStr = r.get('Timestamp');
+        const rowDate = parseIdDate(timestampStr);
+        if (!rowDate) return;
+        
+        const mDate = moment(rowDate);
+        const desc = r.get('Description') || 'No description';
+        const cat = r.get('Category') || 'Miscellaneous';
+        
+        const tx = { amt, desc, cat, date: mDate, timestamp: timestampStr };
+        
+        // MTD check
+        if (mDate.isSame(now, 'month') && mDate.isSameOrBefore(now, 'day')) {
+            mtdTransactions.push(tx);
+        }
+        
+        // PMTD check
+        if (mDate.isSame(prevMonthStart, 'month') && mDate.isSameOrBefore(prevMonthSameDayEnd, 'day')) {
+            pmtdTransactions.push(tx);
+        }
+        
+        // Filtered check (for the main list in the report)
+        let matchesFilter = false;
+        if (filterType === 'daily') {
+            matchesFilter = mDate.isSame(now, 'day');
+        } else if (filterType === 'weekly') {
+            matchesFilter = mDate.isSame(now, 'isoWeek');
+        } else if (filterType === 'monthly') {
+            matchesFilter = mDate.isSame(now, 'month') && mDate.isSameOrBefore(now, 'day');
+        } else if (filterType === 'all') {
+            matchesFilter = true;
+        }
+        
+        if (matchesFilter) {
+            filteredTransactions.push(tx);
+        }
+    });
+
+    if (filterType === 'daily') {
+        const totalFiltered = filteredTransactions.reduce((sum, tx) => sum + tx.amt, 0);
+        const txCount = filteredTransactions.length;
+        
+        const catData = {};
+        filteredTransactions.forEach(tx => {
+            if (!catData[tx.cat]) catData[tx.cat] = { total: 0, items: [] };
+            catData[tx.cat].total += tx.amt;
+            catData[tx.cat].items.push({ desc: tx.desc, amt: tx.amt });
+        });
+
+        const mtdTotal = mtdTransactions.reduce((sum, tx) => sum + tx.amt, 0);
+        const currentDayNumber = now.date();
+        const daysInMonth = now.daysInMonth();
+        const burnRate = currentDayNumber > 0 ? (mtdTotal / currentDayNumber) : 0;
+        const projectedEOM = burnRate * daysInMonth;
+
+        const uniqueDaysWithTx = new Set(mtdTransactions.map(tx => tx.date.date()));
+        const zeroSpendDays = currentDayNumber - uniqueDaysWithTx.size;
+
+        let res = `📅 *Daily Finance Summary (${dateStr})*\n`;
+        res += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+        res += `💰 *Today's Total:* Rp ${totalFiltered.toLocaleString('id-ID')}\n`;
+        res += `📝 *Today's Transactions:* ${txCount}\n\n`;
+        
+        if (txCount > 0) {
+            res += `📂 *Today's Spend:*\n`;
+            const sortedCats = Object.entries(catData).sort((a, b) => b[1].total - a[1].total);
+            for (const [cat, data] of sortedCats) {
+                const emoji = CAT_EMOJIS[cat] || '📦';
+                const pct = Math.round((data.total / totalFiltered) * 100);
+                res += `┌──────────────────\n`;
+                res += `│ ${emoji} *${cat}*\n`;
+                res += `│    Rp ${data.total.toLocaleString('id-ID')} (${pct}%)\n`;
+                data.items.forEach(item => {
+                    res += `│    • ${item.desc} — Rp ${item.amt.toLocaleString('id-ID')}\n`;
+                });
+                res += `└──────────────────\n`;
+            }
+            res += `\n`;
+        } else {
+            res += `✨ No expenses logged today!\n\n`;
+        }
+        
+        res += `📊 *MTD Insights (Month-to-Date):*\n`;
+        res += `• MTD Total: Rp ${mtdTotal.toLocaleString('id-ID')}\n`;
+        res += `• Daily Burn Rate: Rp ${Math.round(burnRate).toLocaleString('id-ID')}/day\n`;
+        res += `• Projected EOM: Rp ${Math.round(projectedEOM).toLocaleString('id-ID')}\n`;
+        res += `• Zero-Spend Days: ${zeroSpendDays} days this month! 🎉\n`;
+        res += `━━━━━━━━━━━━━━━━━━━━━━`;
+        return res;
+    }
+
+    if (filterType === 'weekly') {
+        const totalFiltered = filteredTransactions.reduce((sum, tx) => sum + tx.amt, 0);
+        const txCount = filteredTransactions.length;
+        
+        const catData = {};
+        filteredTransactions.forEach(tx => {
+            if (!catData[tx.cat]) catData[tx.cat] = { total: 0, items: [] };
+            catData[tx.cat].total += tx.amt;
+            catData[tx.cat].items.push({ desc: tx.desc, amt: tx.amt });
+        });
+
+        const leakCounts = {};
+        const leakSpend = {};
+        filteredTransactions.forEach(tx => {
+            const descLower = tx.desc.toLowerCase();
+            LEAK_KEYWORDS.forEach(kw => {
+                if (descLower.includes(kw)) {
+                    leakCounts[kw] = (leakCounts[kw] || 0) + 1;
+                    leakSpend[kw] = (leakSpend[kw] || 0) + tx.amt;
+                }
+            });
+        });
+
+        const leaks = Object.entries(leakCounts)
+            .filter(([kw, count]) => count >= 3)
+            .map(([kw, count]) => ({ kw, count, total: leakSpend[kw] }));
+
+        const daySpends = {};
+        filteredTransactions.forEach(tx => {
+            const dayName = tx.date.format('dddd');
+            daySpends[dayName] = (daySpends[dayName] || 0) + tx.amt;
+        });
+        
+        let maxDayName = 'N/A';
+        let maxDayAmt = 0;
+        for (const [day, amt] of Object.entries(daySpends)) {
+            if (amt > maxDayAmt) {
+                maxDayAmt = amt;
+                maxDayName = day;
+            }
+        }
+
+        const periodStr = `${startOfWeek.format('D MMM')} - ${endOfWeek.format('D MMM YYYY')}`;
+        let res = `📅 *Weekly Finance Summary (WTD)*\n`;
+        res += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+        res += `📅 *Period:* ${periodStr}\n`;
+        res += `💰 *Total WTD Spend:* Rp ${totalFiltered.toLocaleString('id-ID')}\n`;
+        res += `📝 *Transactions:* ${txCount}\n\n`;
+        
+        if (txCount > 0) {
+            res += `📂 *By Category:*\n`;
+            const sortedCats = Object.entries(catData).sort((a, b) => b[1].total - a[1].total);
+            for (const [cat, data] of sortedCats) {
+                const emoji = CAT_EMOJIS[cat] || '📦';
+                const pct = Math.round((data.total / totalFiltered) * 100);
+                res += `┌──────────────────\n`;
+                res += `│ ${emoji} *${cat}*\n`;
+                res += `│    Rp ${data.total.toLocaleString('id-ID')} (${pct}%)\n`;
+                data.items.forEach(item => {
+                    res += `│    • ${item.desc} — Rp ${item.amt.toLocaleString('id-ID')}\n`;
+                });
+                res += `└──────────────────\n`;
+            }
+            res += `\n`;
+        } else {
+            res += `✨ No expenses logged this week!\n\n`;
+        }
+        
+        res += `🔍 *Weekly Profiler Insights:*\n`;
+        res += `• 🏆 *Highest Spend Day:* ${maxDayName} ${maxDayAmt > 0 ? `(Rp ${maxDayAmt.toLocaleString('id-ID')})` : ''}\n`;
+        
+        if (leaks.length > 0) {
+            res += `• ⚠️ *Micro-Leak Alerts (Freq ≥ 3):*\n`;
+            leaks.forEach(lk => {
+                res += `  - *${lk.kw}* (${lk.count}x): Rp ${lk.total.toLocaleString('id-ID')}\n`;
+            });
+            res += `  _(Tip: Try budgeting these minor recurring costs!)_\n`;
+        } else {
+            res += `• 🛡️ *Micro-Leaks:* No leaks detected this week. Great job!\n`;
+        }
+        res += `━━━━━━━━━━━━━━━━━━━━━━`;
+        return res;
+    }
+
+    if (filterType === 'monthly') {
+        const mtdTotal = mtdTransactions.reduce((sum, tx) => sum + tx.amt, 0);
+        const pmtdTotal = pmtdTransactions.reduce((sum, tx) => sum + tx.amt, 0);
+        const isFirstMonth = pmtdTotal === 0;
+        
+        const mtdCatTotals = {};
+        const mtdCatData = {};
+        mtdTransactions.forEach(tx => {
+            mtdCatTotals[tx.cat] = (mtdCatTotals[tx.cat] || 0) + tx.amt;
+            if (!mtdCatData[tx.cat]) mtdCatData[tx.cat] = { total: 0, items: [] };
+            mtdCatData[tx.cat].total += tx.amt;
+            mtdCatData[tx.cat].items.push({ desc: tx.desc, amt: tx.amt });
+        });
+        
+        const pmtdCatTotals = {};
+        pmtdTransactions.forEach(tx => {
+            pmtdCatTotals[tx.cat] = (pmtdCatTotals[tx.cat] || 0) + tx.amt;
+        });
+
+        const momAlerts = [];
+        if (!isFirstMonth) {
+            for (const [cat, mtdAmt] of Object.entries(mtdCatTotals)) {
+                const pmtdAmt = pmtdCatTotals[cat] || 0;
+                if (pmtdAmt > 0) {
+                    const pctIncrease = ((mtdAmt - pmtdAmt) / pmtdAmt) * 100;
+                    if (pctIncrease > 20) {
+                        momAlerts.push({
+                            cat,
+                            mtdAmt,
+                            pmtdAmt,
+                            pct: Math.round(pctIncrease)
+                        });
+                    }
+                } else {
+                    momAlerts.push({
+                        cat,
+                        mtdAmt,
+                        pmtdAmt: 0,
+                        pct: 100
+                    });
+                }
+            }
+        }
+
+        const benchmarkAlerts = [];
+        for (const [cat, mtdAmt] of Object.entries(mtdCatTotals)) {
+            const pctOfTotal = mtdTotal > 0 ? ((mtdAmt / mtdTotal) * 100) : 0;
+            const benchmarkPct = BPS_BENCHMARKS[cat] || 5;
+            if (pctOfTotal > (benchmarkPct + 5)) {
+                benchmarkAlerts.push({
+                    cat,
+                    pct: Math.round(pctOfTotal),
+                    benchmark: benchmarkPct,
+                    over: Math.round(pctOfTotal - benchmarkPct)
+                });
+            }
+        }
+
+        const outliers = [...mtdTransactions]
+            .sort((a, b) => b.amt - a.amt)
+            .slice(0, 3);
+
+        const monthName = now.format('MMMM YYYY');
+        let res = `📅 *Monthly Finance Summary (MTD)*\n`;
+        res += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+        res += `📅 *Month:* ${monthName}\n`;
+        res += `💰 *Total MTD Spend:* Rp ${mtdTotal.toLocaleString('id-ID')}\n`;
+        if (!isFirstMonth) {
+            res += `📊 *vs PMTD Same-Period:* Rp ${pmtdTotal.toLocaleString('id-ID')}\n`;
+        }
+        res += `📝 *Transactions:* ${mtdTransactions.length}\n\n`;
+        
+        if (mtdTransactions.length > 0) {
+            res += `📂 *By Category MTD:*\n`;
+            const sortedCats = Object.entries(mtdCatData).sort((a, b) => b[1].total - a[1].total);
+            for (const [cat, data] of sortedCats) {
+                const emoji = CAT_EMOJIS[cat] || '📦';
+                const pct = Math.round((data.total / mtdTotal) * 100);
+                res += `┌──────────────────\n`;
+                res += `│ ${emoji} *${cat}*\n`;
+                res += `│    Rp ${data.total.toLocaleString('id-ID')} (${pct}%)\n`;
+                data.items.forEach(item => {
+                    res += `│    • ${item.desc} — Rp ${item.amt.toLocaleString('id-ID')}\n`;
+                });
+                res += `└──────────────────\n`;
+            }
+            res += `\n`;
+        } else {
+            res += `✨ No expenses logged this month!\n\n`;
+        }
+        
+        res += `📊 *Monthly Alerts & Insights:*\n`;
+        
+        if (isFirstMonth) {
+            res += `• 🌱 *Welcome:* This is your first month tracking. We will show Month-over-Month comparisons starting next month!\n`;
+        } else {
+            if (momAlerts.length > 0) {
+                res += `• 🚨 *MoM Spend Increase (>20%):*\n`;
+                momAlerts.forEach(al => {
+                    if (al.pmtdAmt > 0) {
+                        res += `  - *${al.cat}:* Rp ${al.mtdAmt.toLocaleString('id-ID')} (+${al.pct}% vs last month's Rp ${al.pmtdAmt.toLocaleString('id-ID')})\n`;
+                    } else {
+                        res += `  - *${al.cat}:* Rp ${al.mtdAmt.toLocaleString('id-ID')} (New category spend this month!)\n`;
+                    }
+                });
+            } else {
+                res += `• MoM Spend: No categories had a significant spend increase. Excellent discipline!\n`;
+            }
+        }
+        
+        if (benchmarkAlerts.length > 0) {
+            res += `• 📊 *Budget Overage Alerts (>5% Over):*\n`;
+            benchmarkAlerts.forEach(al => {
+                res += `  - *${al.cat}:* ${al.pct}% of total spend (Benchmark: ${al.benchmark}% — Over by ${al.over}%)\n`;
+            });
+        }
+        
+        if (outliers.length > 0) {
+            res += `• 💸 *Top 3 Outlier Transactions:*\n`;
+            outliers.forEach((out, idx) => {
+                res += `  ${idx + 1}. Rp ${out.amt.toLocaleString('id-ID')} — ${out.desc} (${CAT_EMOJIS[out.cat] || ''} ${out.cat})\n`;
+            });
+        }
+        res += `━━━━━━━━━━━━━━━━━━━━━━`;
+        return res;
+    }
+
+    if (filterType === 'all') {
+        const totalFiltered = filteredTransactions.reduce((sum, tx) => sum + tx.amt, 0);
+        const txCount = filteredTransactions.length;
+        
+        const catData = {};
+        filteredTransactions.forEach(tx => {
+            if (!catData[tx.cat]) catData[tx.cat] = { total: 0, items: [] };
+            catData[tx.cat].total += tx.amt;
+            catData[tx.cat].items.push({ desc: tx.desc, amt: tx.amt });
+        });
+        
+        let res = `📊 *Summary — All Time (${dateStr})*\n`;
+        res += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+        res += `💰 *Total: Rp ${totalFiltered.toLocaleString('id-ID')}*\n`;
+        res += `📝 *Transactions: ${txCount}*\n\n`;
+        res += `📂 *By Category:*\n`;
+        
+        const sorted = Object.entries(catData).sort((a, b) => b[1].total - a[1].total);
+        for (const [cat, data] of sorted) {
+            const emoji = CAT_EMOJIS[cat] || '📦';
+            const pct = Math.round((data.total / totalFiltered) * 100);
+            res += `┌──────────────────\n`;
+            res += `│ ${emoji} *${cat}*\n`;
+            res += `│    Rp ${data.total.toLocaleString('id-ID')} (${pct}%)\n`;
+            data.items.forEach(item => {
+                res += `│    • ${item.desc} — Rp ${item.amt.toLocaleString('id-ID')}\n`;
+            });
+            res += `└──────────────────\n`;
+        }
+        res += `━━━━━━━━━━━━━━━━━━━━━━`;
+        return res;
+    }
+}
+
+async function getReportUsers() {
+    if (!doc) {
+        await initGoogleSheets();
+    }
+    const users = [];
+    if (ADMIN_NUMBER) {
+        users.push({ phone: ADMIN_NUMBER, name: 'Admin' });
+    }
+    if (doc) {
+        const sheet = doc.sheetsByTitle['AuthorizedUsers'];
+        if (sheet) {
+            const rows = await sheet.getRows();
+            rows.forEach(r => {
+                const phone = (r.get('Phone') || '').trim();
+                const name = (r.get('Name') || '').trim();
+                if (phone && name) {
+                    if (!users.some(u => u.phone === phone)) {
+                        users.push({ phone, name });
+                    }
+                }
+            });
+        }
+    }
+    return users;
+}
+
+async function sendScheduledReport(phone, name, type) {
+    try {
+        if (!sock) {
+            console.log(`[Scheduler] WhatsApp socket is not initialized yet. Skipping scheduled report for ${name}.`);
+            return;
+        }
+        const jid = phone.replace('@c.us', '@s.whatsapp.net');
+        console.log(`[Scheduler] Generating ${type} report for ${name} (${jid})...`);
+        const report = await generateReportForUser(name, type);
+        if (report) {
+            await sock.sendMessage(jid, { text: report });
+            console.log(`[Scheduler] Report sent successfully to ${name}`);
+        } else {
+            console.log(`[Scheduler] No report generated/needed for ${name}`);
+        }
+    } catch (err) {
+        console.error(`[Scheduler] Failed to send report to ${name} (${phone}):`, err);
+    }
+}
+
+async function runWeeklyScheduler() {
+    console.log('[Scheduler] Starting Weekly Summary push...');
+    try {
+        const users = await getReportUsers();
+        for (const user of users) {
+            await sendScheduledReport(user.phone, user.name, 'wtd');
+        }
+    } catch (err) {
+        console.error('[Scheduler] Error in weekly scheduler:', err);
+    }
+}
+
+async function runMonthlyScheduler() {
+    const now = moment().utcOffset('+07:00');
+    const isEOM = now.date() === now.daysInMonth();
+    if (!isEOM) {
+        console.log('[Scheduler] Today is not End of Month. Skipping monthly report push.');
+        return;
+    }
+    
+    console.log('[Scheduler] Starting Monthly End-of-Month Summary push...');
+    try {
+        const users = await getReportUsers();
+        for (const user of users) {
+            await sendScheduledReport(user.phone, user.name, 'mtd');
+        }
+    } catch (err) {
+        console.error('[Scheduler] Error in monthly scheduler:', err);
+    }
+}
+
 async function startWhatsAppBot() {
     await initGoogleSheets();
 
@@ -1079,99 +1567,14 @@ async function startWhatsAppBot() {
                 await reply(msg, `✅ *Recorded!*\n\n📝 ${description}\n${catEmojis[category] || '📦'} ${category}\n💰 Rp ${amount.toLocaleString('id-ID')}\n📅 ${customDate || 'Today'}`);
             }
             else if (command === '/summary') {
-                const sheet = doc.sheetsByTitle[userName];
-                if (!sheet) {
-                    await reply(msg, "No expenses logged yet!");
-                    return;
+                try {
+                    const timeframe = argsText || 'td';
+                    const report = await generateReportForUser(userName, timeframe);
+                    await reply(msg, report);
+                } catch (err) {
+                    console.error("Error generating summary:", err);
+                    await reply(msg, "❌ Failed to generate summary: " + err.message);
                 }
-                const rows = await sheet.getRows();
-                
-                // Date filtering
-                const filter = argsText.toLowerCase() || 'today';
-                const now = new Date();
-                const jakartaNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
-                const todayStart = new Date(jakartaNow.getFullYear(), jakartaNow.getMonth(), jakartaNow.getDate());
-                const weekStart = getStartOfWeek(jakartaNow);
-                const monthStart = new Date(jakartaNow.getFullYear(), jakartaNow.getMonth(), 1);
-                
-                let filterStart = todayStart;
-                let filterLabel = 'Today';
-                if (filter === 'wtd' || filter === 'week') {
-                    filterStart = weekStart;
-                    filterLabel = 'This Week';
-                } else if (filter === 'mtd' || filter === 'month') {
-                    filterStart = monthStart;
-                    filterLabel = 'Month to Date';
-                } else if (filter === 'all') {
-                    filterStart = new Date(0);
-                    filterLabel = 'All Time';
-                }
-                
-                const dateStr = jakartaNow.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-                
-                let total = 0;
-                let txCount = 0;
-                const catData = {}; // { category: { total, items: [{desc, amt}] } }
-                
-                rows.forEach(r => {
-                    const amt = parseFloat(r.get('Amount'));
-                    if (isNaN(amt)) return;
-                    
-                    const rowDate = parseIdDate(r.get('Timestamp'));
-                    if (rowDate && rowDate < filterStart) return;
-                    
-                    total += amt;
-                    txCount++;
-                    const cat = r.get('Category') || 'Miscellaneous';
-                    const desc = r.get('Description') || 'No description';
-                    if (!catData[cat]) catData[cat] = { total: 0, items: [] };
-                    catData[cat].total += amt;
-                    catData[cat].items.push({ desc, amt });
-                });
-                
-                if (txCount === 0) {
-                    await reply(msg, `📊 *Summary — ${filterLabel}*\n━━━━━━━━━━━━━━━━━\n\nNo expenses found for this period.`);
-                    return;
-                }
-                
-                const catEmojis = { 
-                    'Food & Beverage': '🍔', 
-                    'Groceries': '🛒', 
-                    'Transportation': '🚗', 
-                    'Utilities': '⚡', 
-                    'Bills': '🧾',
-                    'Sport & Hobbies': '🏸',
-                    'Shopping': '🛍️', 
-                    'Health': '💊', 
-                    'Entertainment': '🎬', 
-                    'Investment & Savings': '📈',
-                    'Education': '📚',
-                    'Donation & Charity': '🤝',
-                    'Miscellaneous': '📦' 
-                };
-                
-                let res = `📊 *Summary — ${filterLabel} (${dateStr})*\n`;
-                res += `━━━━━━━━━━━━━━━━━━━━━━\n`;
-                res += `💰 *Total: Rp ${total.toLocaleString('id-ID')}*\n`;
-                res += `📝 *Transactions: ${txCount}*\n\n`;
-                res += `📂 *By Category:*\n`;
-                
-                // Sort categories by total descending
-                const sorted = Object.entries(catData).sort((a, b) => b[1].total - a[1].total);
-                
-                for (const [cat, data] of sorted) {
-                    const emoji = catEmojis[cat] || '📦';
-                    const pct = Math.round((data.total / total) * 100);
-                    res += `┌──────────────────\n`;
-                    res += `│ ${emoji} *${cat}*\n`;
-                    res += `│    Rp ${data.total.toLocaleString('id-ID')} (${data.items.length} item${data.items.length > 1 ? 's' : ''}, ${pct}%)\n`;
-                    data.items.forEach(item => {
-                        res += `│    • ${item.desc} — Rp ${item.amt.toLocaleString('id-ID')}\n`;
-                    });
-                    res += `└──────────────────\n`;
-                }
-                
-                await reply(msg, res);
             }
             else if (command === '/splitbill' || command === '/spltbill' || command === '/sb') {
                 sessions[from] = { state: 'AWAITING_RECEIPT' };
@@ -1189,3 +1592,19 @@ async function startWhatsAppBot() {
 }
 
 startWhatsAppBot();
+
+// Schedule Weekly WTD report (every Sunday at 20:00 Asia/Jakarta time)
+cron.schedule('0 20 * * 0', async () => {
+    await runWeeklyScheduler();
+}, {
+    scheduled: true,
+    timezone: "Asia/Jakarta"
+});
+
+// Schedule Monthly MTD report (daily check at 20:00 Asia/Jakarta time)
+cron.schedule('0 20 * * *', async () => {
+    await runMonthlyScheduler();
+}, {
+    scheduled: true,
+    timezone: "Asia/Jakarta"
+});
