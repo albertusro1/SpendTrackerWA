@@ -258,6 +258,40 @@ async function calculateSplitBill(msg, session, userName, from) {
         });
     }
     
+    // Calculate Consolidated Net-Off if there are multiple creditors
+    const activeCreditors = [];
+    const activeDebtors = [];
+    
+    for (const [name, bal] of Object.entries(balances)) {
+        if (bal < -0.01) {
+            activeCreditors.push({ name, amount: -bal });
+        } else if (bal > 0.01) {
+            activeDebtors.push({ name, amount: bal });
+        }
+    }
+    
+    // Sort creditors by amount descending (largest creditor/treasurer first)
+    activeCreditors.sort((a, b) => b.amount - a.amount);
+    
+    if (activeCreditors.length > 1) {
+        const consolidator = activeCreditors[0].name;
+        let consolidatedReport = `\n━━━━━━━━━━━━━━━━━━━━\n🧾 *Consolidated Net-Off (Via ${consolidator})*\n\n`;
+        consolidatedReport += `All debtors transfer to *${consolidator}*:\n`;
+        
+        activeDebtors.forEach(d => {
+            consolidatedReport += `- *${d.name}* owes *${consolidator}*: Rp ${Math.round(d.amount).toLocaleString('id-ID')}\n`;
+        });
+        
+        consolidatedReport += `\nThen, *${consolidator}* transfers to other creditors:\n`;
+        
+        for (let i = 1; i < activeCreditors.length; i++) {
+            const c = activeCreditors[i];
+            consolidatedReport += `- *${consolidator}* owes *${c.name}*: Rp ${Math.round(c.amount).toLocaleString('id-ID')}\n`;
+        }
+        
+        report += consolidatedReport;
+    }
+    
     await reply(msg, report);
     delete sessions[from];
 }
