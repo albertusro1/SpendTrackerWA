@@ -1364,13 +1364,67 @@ async function startWhatsAppBot() {
             }
 
             if (sessions[from]) {
-                await handleSplitBill(msg, userName, from, rawText.trim());
-                return;
+                if (sessions[from].step === 'AWAITING_LOCATION') {
+                    const isLocation = !!msg.message?.locationMessage;
+                    if (!isLocation) {
+                        await reply(msg, "⛔ Please send a valid WhatsApp Location pin using the attachment button (+ or 📎).");
+                        return;
+                    }
+
+                    const lat = msg.message.locationMessage.degreesLatitude;
+                    const lng = msg.message.locationMessage.degreesLongitude;
+                    const query = sessions[from].query;
+                    
+                    await reply(msg, `⏳ Searching for the best ${query} nearby...`);
+                    
+                    try {
+                        const url = `https://serpapi.com/search.json?engine=google_local&q=${encodeURIComponent(query)}&ll=@${lat},${lng},15z&api_key=${process.env.SERPAPI_KEY}`;
+                        
+                        const response = await fetch(url);
+                        const data = await response.json();
+                        
+                        if (!data.local_results || data.local_results.length === 0) {
+                            await reply(msg, "😔 I couldn't find any good matches near your location.");
+                            delete sessions[from];
+                            return;
+                        }
+
+                        const topResults = data.local_results.slice(0, 3);
+                        let replyString = `📍 *Top 3 ${query.toUpperCase()} nearby:*\n\n`;
+                        
+                        topResults.forEach((place, index) => {
+                            const name = place.title || 'Unknown Place';
+                            const rating = place.rating ? `⭐ ${place.rating} (${place.reviews} reviews)` : 'No rating';
+                            
+                            const description = place.description || place.snippet || '';
+                            const commentStr = description ? `\n💬 "${description}"` : '';
+                            
+                            const mapsLink = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name)}`;
+                            const tiktokLink = `https://www.tiktok.com/search?q=${encodeURIComponent(name)}`;
+                            const igLink = `https://www.instagram.com/explore/tags/${name.replace(/\s+/g, '').toLowerCase()}/`;
+                            
+                            replyString += `*${index + 1}. ${name}*\n${rating}${commentStr}\n🗺️ GMaps: ${mapsLink}\n📱 Check Vibes: [TikTok](${tiktokLink}) | [Instagram](${igLink})\n\n`;
+                        });
+
+                        await reply(msg, replyString.trim());
+                        delete sessions[from];
+                        return;
+                        
+                    } catch (error) {
+                        console.error('SerpApi Error:', error);
+                        await reply(msg, "⚠️ Sorry, the search engine encountered an error. Please try again later.");
+                        delete sessions[from];
+                        return;
+                    }
+                } else {
+                    await handleSplitBill(msg, userName, from, rawText.trim());
+                    return;
+                }
             }
 
             const helpKeywords = ['hi', 'hello', 'help', 'halo', 'p', '/help'];
             if (helpKeywords.includes(text)) {
-                await reply(msg, "Hello! 👋 I am your Money Robot! 🤖💰\n\nHere is how we can play:\n\n1️⃣ *Save Money:* Start with /log then tell me what you bought!\n_(Say: '/log 50k for ice cream' 🍦)_\n\n2️⃣ *Check Piggy Bank:* Want to see your money?\n_(Type: '/summary today' or '/summary mtd' 🐷)_\n\n3️⃣ *Share Food:* Ate with friends? I can do the math!\n_(Type: '/splitbill' 🍕)_\n\n4️⃣ *Add Friends (Boss Only):*\n_(Type: '/adduser [number] [name]' 👑)_");
+                await reply(msg, "Hello! 👋 I am your personal *Lifestyle Assistant*! 🌟\n\nHere is how I can help make your day easier:\n\n💸 *Money Management*\n• `/log [amount] for [item]` - Log a daily expense.\n• `/summary today` or `/summary mtd` - View your financial analytics.\n• `/splitbill` - Calculate shared bills with friends.\n\n📍 *Local Concierge*\n• `/find [place]` - Find the best spots near your current location (e.g., '/find coffee').\n\n👑 *Admin Settings*\n• `/adduser [number] [name]` - Add a new user.");
                 return;
             }
 
@@ -1583,6 +1637,14 @@ async function startWhatsAppBot() {
                 } else {
                     await reply(msg, "Alright! 🧾 Please send me a photo of the receipt. If you don't have a photo, you can type/paste your items list directly instead (e.g., \"Badminton 163k\" or \"Pizza 100k, Coke 20k\").");
                 }
+            }
+            else if (command === '/find') {
+                if (!argsText) {
+                    await reply(msg, "🔍 Please specify what you want to find (e.g. `/find coffee` or `/find restaurants`).");
+                    return;
+                }
+                sessions[from] = { step: 'AWAITING_LOCATION', query: argsText };
+                await reply(msg, "📍 Please send me your current Location Pin (attachment 📎 -> Location) so I can search nearby spots for you.");
             }
         } catch (e) {
             console.error(e);
