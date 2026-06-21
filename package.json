@@ -16,6 +16,7 @@
     "@whiskeysockets/baileys": "latest",
     "node-cron": "^3.0.3",
     "moment": "^2.30.1",
-    "@google-cloud/vision": "^4.2.1"
+    "@google-cloud/vision": "^4.2.1",
+    "@google-cloud/translate": "^8.2.0"
   }
 }

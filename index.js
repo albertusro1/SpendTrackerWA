@@ -8,8 +8,12 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const moment = require('moment');
 const cron = require('node-cron');
 const vision = require('@google-cloud/vision');
+const { Translate } = require('@google-cloud/translate').v2;
 
 const visionClient = new vision.ImageAnnotatorClient({ keyFilename: './credentials.json' });
+const translateClient = new Translate({ keyFilename: './credentials.json' });
+
+// NOTE: OPENWEATHER_API_KEY and GOOGLE_MAPS_API_KEY (for Distance Matrix) must be added to the .env file.
 
 const BUDGET_LIMITS = {
     'Food & Beverage': 2000000,
@@ -1728,6 +1732,36 @@ async function startWhatsAppBot() {
                     await reply(msg, `⏳ Searching for the best ${query} nearby...`);
                     
                     try {
+                        let weatherString = '';
+                        if (process.env.OPENWEATHER_API_KEY) {
+                            try {
+                                const weatherUrl = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lng}&appid=${process.env.OPENWEATHER_API_KEY}&units=metric`;
+                                const weatherResponse = await fetch(weatherUrl);
+                                if (weatherResponse.ok) {
+                                    const weatherData = await weatherResponse.json();
+                                    if (weatherData.weather && weatherData.weather[0] && weatherData.main) {
+                                        const mainCond = weatherData.weather[0].main;
+                                        const temp = Math.round(weatherData.main.temp);
+                                        
+                                        let emoji = '⛅';
+                                        if (mainCond.toLowerCase().includes('rain')) {
+                                            emoji = '🌧️';
+                                        } else if (mainCond.toLowerCase().includes('thunderstorm')) {
+                                            emoji = '⚡';
+                                        } else if (mainCond.toLowerCase().includes('clear')) {
+                                            emoji = '☀️';
+                                        } else if (mainCond.toLowerCase().includes('cloud')) {
+                                            emoji = '☁️';
+                                        }
+                                        
+                                        weatherString = `${emoji} *Current Weather:* ${mainCond} (${temp}°C)\n\n`;
+                                    }
+                                }
+                            } catch (weatherErr) {
+                                console.error("Weather Fetch Error:", weatherErr);
+                            }
+                        }
+
                         const url = `https://serpapi.com/search.json?engine=google_maps&q=${encodeURIComponent(query)}&type=search&ll=${encodeURIComponent(`@${lat},${lng},15z`)}&api_key=${process.env.SERPAPI_KEY}`;
                         
                         const response = await fetch(url);
@@ -1748,7 +1782,27 @@ async function startWhatsAppBot() {
                         }
 
                         const topResults = data.local_results.slice(0, 3);
-                        let replyString = `📍 *Top 3 ${query.toUpperCase()} nearby:*\n\n`;
+
+                        // Distance Matrix Lookup
+                        let distanceData = null;
+                        if (process.env.GOOGLE_MAPS_API_KEY) {
+                            try {
+                                const destinations = topResults.map(place => {
+                                    if (place.gps_coordinates && place.gps_coordinates.latitude && place.gps_coordinates.longitude) {
+                                        return `${place.gps_coordinates.latitude},${place.gps_coordinates.longitude}`;
+                                    }
+                                    return encodeURIComponent(place.address || place.title);
+                                }).join('|');
+
+                                const distanceUrl = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${lat},${lng}&destinations=${destinations}&mode=two_wheeler&key=${process.env.GOOGLE_MAPS_API_KEY}`;
+                                const distanceResponse = await fetch(distanceUrl);
+                                distanceData = await distanceResponse.json();
+                            } catch (distErr) {
+                                console.error("Distance Matrix Fetch Error:", distErr);
+                            }
+                        }
+
+                        let replyString = weatherString + `📍 *Top 3 ${query.toUpperCase()} nearby:*\n\n`;
                         
                         topResults.forEach((place, index) => {
                             const name = place.title || 'Unknown Place';
@@ -1761,7 +1815,28 @@ async function startWhatsAppBot() {
                             const tiktokLink = `https://www.tiktok.com/search?q=${encodeURIComponent(name)}`;
                             const igLink = `https://www.instagram.com/explore/tags/${name.replace(/\s+/g, '').toLowerCase()}/`;
                             
-                            replyString += `*${index + 1}. ${name}*\n${rating}${commentStr}\n🗺️ GMaps: ${mapsLink}\n📱 Check Vibes: [TikTok](${tiktokLink}) | [Instagram](${igLink})\n\n`;
+                            let openStatusStr = '';
+                            if (place.open_state) {
+                                let circle = '⚪';
+                                if (place.open_state.toLowerCase().includes('closed')) {
+                                    circle = '🔴';
+                                } else if (place.open_state.toLowerCase().includes('open')) {
+                                    circle = '🟢';
+                                }
+                                openStatusStr = `${circle} ${place.open_state}\n`;
+                            }
+                            
+                            let etaStr = '';
+                            if (distanceData && distanceData.rows && distanceData.rows[0] && distanceData.rows[0].elements[index]) {
+                                const element = distanceData.rows[0].elements[index];
+                                if (element.status === 'OK') {
+                                    const distanceText = element.distance?.text || '';
+                                    const durationText = element.duration?.text || '';
+                                    etaStr = `🛵 *ETA:* ${durationText} (${distanceText})\n`;
+                                }
+                            }
+
+                            replyString += `*${index + 1}. ${name}*\n${openStatusStr}${etaStr}${rating}${commentStr}\n🗺️ GMaps: ${mapsLink}\n📱 Check Vibes: [TikTok](${tiktokLink}) | [Instagram](${igLink})\n\n`;
                         });
 
                         await reply(msg, replyString.trim());
@@ -1824,6 +1899,48 @@ async function startWhatsAppBot() {
                     caption: `✅ Added ${name}.\nThey can scan this QR or go to ${waUrl} to talk to me!`
                 });
             } 
+            else if (command === '/translate') {
+                const isImage = msg.message?.imageMessage || msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage;
+                if (!isImage) {
+                    await reply(msg, "📸 Please send a photo with `/translate` or reply to an existing photo with `/translate`.");
+                    return;
+                }
+
+                await reply(msg, "Extracting and translating text... 🤖 Please wait a moment.");
+
+                try {
+                    const targetMessage = msg.message?.imageMessage ? msg : { message: msg.message.extendedTextMessage.contextInfo.quotedMessage };
+                    const buffer = await downloadMediaMessage(
+                        targetMessage,
+                        'buffer',
+                        {},
+                        { logger: pino({ level: 'silent' }) }
+                    );
+
+                    if (!buffer) {
+                        await reply(msg, "❌ Failed to download image. Try again.");
+                        return;
+                    }
+
+                    const [result] = await visionClient.textDetection({ image: { content: buffer } });
+                    const detectedText = result.fullTextAnnotation ? result.fullTextAnnotation.text : null;
+
+                    if (!detectedText || !detectedText.trim()) {
+                        await reply(msg, "⚠️ I couldn't detect any readable text in this image.");
+                        return;
+                    }
+
+                    const [translation] = await translateClient.translate(detectedText, 'id');
+
+                    let replyMsg = `📝 *Original Text:*\n${detectedText}\n\n`;
+                    replyMsg += `🇮🇩 *Translation (Indonesian):*\n${translation}`;
+
+                    await reply(msg, replyMsg);
+                } catch (err) {
+                    console.error("Translation failed:", err);
+                    await reply(msg, "❌ Translation failed: " + err.message);
+                }
+            }
             else if (command === '/log') {
                 const amountRegex = /(\d+)(?:\s*(k|rb|ribu))?/i;
                 const match = argsText.match(amountRegex);
