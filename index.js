@@ -1528,6 +1528,46 @@ async function sendScheduledReport(phone, name, type) {
             console.log(`[Scheduler] WhatsApp socket is not initialized yet. Skipping scheduled report for ${name}.`);
             return;
         }
+
+        if (!doc) await initGoogleSheets();
+        const sheet = doc.sheetsByTitle[name];
+        if (!sheet) {
+            console.log(`[Scheduler] No sheet found for ${name}. Skipping report.`);
+            return;
+        }
+
+        const rows = await sheet.getRows();
+        const now = moment().utcOffset('+07:00');
+        let hasTransactionThisPeriod = false;
+
+        for (const r of rows) {
+            const amt = parseFloat(r.get('Amount'));
+            if (isNaN(amt)) continue;
+
+            const timestampStr = r.get('Timestamp');
+            const rowDate = parseIdDate(timestampStr);
+            if (!rowDate) continue;
+
+            const mDate = moment(rowDate);
+
+            if (type === 'wtd') {
+                if (mDate.isSame(now, 'isoWeek')) {
+                    hasTransactionThisPeriod = true;
+                    break;
+                }
+            } else if (type === 'mtd') {
+                if (mDate.isSame(now, 'month')) {
+                    hasTransactionThisPeriod = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasTransactionThisPeriod) {
+            console.log(`[Scheduler] User ${name} has no logs/records for ${type} this period. Skipping report to avoid spam.`);
+            return;
+        }
+
         const jid = phone.replace('@c.us', '@s.whatsapp.net');
         console.log(`[Scheduler] Generating ${type} report for ${name} (${jid})...`);
         const report = await generateReportForUser(name, type);
