@@ -1424,7 +1424,13 @@ async function startWhatsAppBot() {
 
             const helpKeywords = ['hi', 'hello', 'help', 'halo', 'p', '/help'];
             if (helpKeywords.includes(text)) {
-                await reply(msg, "Hello! 👋 I am your personal *Lifestyle Assistant*! 🌟\n\nHere is how I can help make your day easier:\n\n💸 *Money Management*\n• `/log [amount] for [item]` - Log a daily expense.\n• `/summary today` or `/summary mtd` - View your financial analytics.\n• `/splitbill` - Calculate shared bills with friends.\n\n📍 *Local Concierge*\n• `/find [place]` - Find the best spots near your current location (e.g., '/find coffee').\n\n👑 *Admin Settings*\n• `/adduser [number] [name]` - Add a new user.");
+                let helpText = "Hello! 👋 I am your personal *Lifestyle Assistant*! 🌟\n\nHere is how I can help make your day easier:\n\n💸 *Money Management*\n• `/log [amount] for [item]` - Log a daily expense.\n• `/summary today` or `/summary mtd` - View your financial analytics.\n• `/splitbill` - Calculate shared bills with friends.\n\n📍 *Local Concierge*\n• `/find [place]` - Find the best spots near your current location (e.g., '/find coffee').";
+                
+                if (isAdmin) {
+                    helpText += "\n\n👑 *Admin Settings*\n• `/adduser [number] [name]` - Add a new user.";
+                }
+                
+                await reply(msg, helpText);
                 return;
             }
 
