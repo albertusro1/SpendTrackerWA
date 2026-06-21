@@ -1371,19 +1371,35 @@ async function startWhatsAppBot() {
                         return;
                     }
 
+                    if (!process.env.SERPAPI_KEY) {
+                        console.error("SerpApi Error: SERPAPI_KEY is not defined in the environment.");
+                        await reply(msg, "⚠️ Local search is not configured. (Missing `SERPAPI_KEY` on server).");
+                        delete sessions[from];
+                        return;
+                    }
+
                     const lat = msg.message.locationMessage.degreesLatitude;
                     const lng = msg.message.locationMessage.degreesLongitude;
                     const query = sessions[from].query;
                     
+                    console.log(`DEBUG: Concierge Location received: lat=${lat}, lng=${lng}, query=${query}`);
                     await reply(msg, `⏳ Searching for the best ${query} nearby...`);
                     
                     try {
-                        const url = `https://serpapi.com/search.json?engine=google_maps&q=${encodeURIComponent(query)}&type=search&ll=@${lat},${lng},15z&api_key=${process.env.SERPAPI_KEY}`;
+                        const url = `https://serpapi.com/search.json?engine=google_maps&q=${encodeURIComponent(query)}&type=search&ll=${encodeURIComponent(`@${lat},${lng},15z`)}&api_key=${process.env.SERPAPI_KEY}`;
                         
                         const response = await fetch(url);
                         const data = await response.json();
                         
+                        if (data.error) {
+                            console.error("SerpApi API Error:", data.error);
+                            await reply(msg, `⚠️ SerpApi Error: ${data.error}`);
+                            delete sessions[from];
+                            return;
+                        }
+                        
                         if (!data.local_results || data.local_results.length === 0) {
+                            console.log("DEBUG: SerpApi returned no local_results. Response data:", JSON.stringify(data));
                             await reply(msg, "😔 I couldn't find any good matches near your location.");
                             delete sessions[from];
                             return;
