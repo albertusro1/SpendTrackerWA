@@ -1378,7 +1378,7 @@ async function startWhatsAppBot() {
                     await reply(msg, `⏳ Searching for the best ${query} nearby...`);
                     
                     try {
-                        const url = `https://serpapi.com/search.json?engine=google_local&q=${encodeURIComponent(query)}&ll=@${lat},${lng},15z&api_key=${process.env.SERPAPI_KEY}`;
+                        const url = `https://serpapi.com/search.json?engine=google_maps&q=${encodeURIComponent(query)}&type=search&ll=@${lat},${lng},15z&api_key=${process.env.SERPAPI_KEY}`;
                         
                         const response = await fetch(url);
                         const data = await response.json();
