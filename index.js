@@ -7,6 +7,135 @@ const fs = require('fs');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const moment = require('moment');
 const cron = require('node-cron');
+const vision = require('@google-cloud/vision');
+
+const visionClient = new vision.ImageAnnotatorClient({ keyFilename: './credentials.json' });
+
+const BUDGET_LIMITS = {
+    'Food & Beverage': 2000000,
+    'Groceries': 1500000,
+    'Transportation': 1000000,
+    'Entertainment': 1000000,
+    'Global': 6000000 
+};
+
+const CATEGORIES = {
+    'Food & Beverage': [
+        'makan', 'minum', 'kopi', 'nasi', 'ayam', 'bakso', 'sate', 'soto',
+        'rendang', 'gudeg', 'rawon', 'pecel', 'tempe', 'tahu', 'sambal',
+        'es teh', 'es jeruk', 'jus', 'susu', 'roti', 'kue', 'gorengan', 'martabak',
+        'gofood', 'grabfood', 'shopeefood', 'mcd', 'kfc', 'starbucks', 'chatime',
+        'warung', 'food', 'eat', 'lunch', 'dinner', 'breakfast', 'brunch', 'snack',
+        'coffee', 'tea', 'juice', 'milk', 'bread', 'cake', 'pizza', 'burger',
+        'rice', 'noodle', 'pasta', 'chicken', 'beef', 'fish', 'salad',
+        'restaurant', 'cafe', 'bistro', 'dine', 'meal', 'dessert', 'ice cream',
+        'boba', 'matcha', 'latte', 'espresso', 'americano', 'croissant',
+        'sandwich', 'wrap', 'sushi', 'ramen', 'donut', 'waffle', 'pancake',
+        'salt', 'chocolate', 'cookie', 'pastry', 'fries', 'padang',
+        'gacoan', 'solaria', 'richeese', 'baba rafi', 'jco', 'j.co', 'bakmi gm',
+        'cfc', 'marugame', 'udon', 'yoshinoya', 'sushi tei', 'kopi kenangan',
+        'janji jiwa', 'fore coffee', 'excelso', 'mixue', 'tealive', 'dum dum',
+        'koi the', 'koi thé', 'shaburi', 'kintan', 'holy cow', 'holycow',
+        'burger king', 'bk', 'pizza hut', 'ph', 'dominos', 'domino\'s',
+        'aw restaurant', 'a&w', 'mako cake', 'breadtalk', 'tous les jours',
+        'harvest cake', 'sour sally', 'kebab', 'warmindo', 'angkringan',
+        'pecel lele', 'soto betawi', 'martabak pecennongan', 'kopi nako',
+        'kopimana', 'ta wan', 'tawan', 'imperial kitchen', 'dimsum',
+        'd\'cost', 'dcost', 'hokben', 'hoka hoka bento', 'pepper lunch',
+        'sushi go', 'sushigo', 'genki sushi', 'gindaco', 'rejuve', 're.juve',
+        'boost juice', 'kopi toko djawa', 'anomali'
+    ],
+    'Groceries': [
+        'supermarket', 'indomaret', 'alfamart', 'hypermart', 'aeon',
+        'sayur', 'buah', 'bumbu', 'sabun', 'shampo', 'tissue',
+        'grocery', 'market', 'store', 'mart', 'vegetable', 'fruit',
+        'alfamidi', 'midi', 'superindo', 'super indo', 'carrefour', 'transmart',
+        'giant', 'hero supermarket', 'lotte mart', 'lottemart', 'lotte grosir',
+        'farmers market', 'ranch market', 'the foodhall', 'foodhall',
+        'grand lucky', 'grandlucky', 'sayurbox', 'tanihub', 'kebut',
+        'papaya fresh', 'toko kelontong', 'pasar', 'sembako', 'beras',
+        'minyak goreng', 'telur', 'gula', 'garam', 'deterjen', 'pewangi',
+        'pasta gigi', 'odol', 'sikat gigi', 'shampoo'
+    ],
+    'Transportation': [
+        'bensin', 'grab', 'gojek', 'tol', 'parkir', 'pertamax',
+        'taxi', 'uber', 'gas', 'fuel', 'train', 'bus', 'mrt',
+        'ojek', 'transjakarta', 'commuter', 'travel', 'toll',
+        'gocar', 'goride', 'grabcar', 'grabbike', 'maxim', 'indrive',
+        'lrt', 'krl', 'commuterline', 'kereta', 'kai', 'damri',
+        'pertalite', 'pertamax turbo', 'dexlite', 'pertamina dex',
+        'pertamina', 'shell', 'shell super', 'v-power', 'bp fuel',
+        'bp-akr', 'emoney', 'e-money', 'flazz', 'brizzi', 'tapcash',
+        'e-toll', 'etoll', 'linkaja', 'ovo', 'dana', 'gopay',
+        'astrapay', 'bluebird', 'blue bird', 'garuda', 'citilink',
+        'lion air', 'batik air', 'sriwijaya', 'airasia', 'traveloka',
+        'tiket.com', 'kai access', 'go-ride', 'go-car'
+    ],
+    'Utilities': [
+        'listrik', 'token', 'internet', 'pulsa', 'air', 'pdam',
+        'electric', 'water', 'phone', 'wifi', 'bill', 'subscription',
+        'pln', 'telkomsel', 'indosat', 'im3', 'xl', 'tri', '3',
+        'smartfren', 'axis', 'byu', 'by.u', 'indihome', 'first media',
+        'firstmedia', 'biznet', 'myrepublic', 'cbn', 'mnc play', 'telkom',
+        'pascabayar', 'postpaid', 'prabayar', 'prepaid', 'gas alam', 'pgn'
+    ],
+    'Bills': [
+        'tagihan', 'bpjs', 'asuransi', 'pajak', 'tax', 'sewa', 'kost', 'kos',
+        'rent', 'kontrakan', 'subscription', 'langganan', 'credit card', 'cc',
+        'pinjol', 'cicilan', 'leasing'
+    ],
+    'Sport & Hobbies': [
+        'badminton', 'futsal', 'gym', 'court', 'sewa lapangan', 'racket', 'raket',
+        'tenis', 'tennis', 'running', 'lari', 'gowes', 'sepeda', 'renang',
+        'swimming', 'fitness', 'yoga', 'pilates', 'golf', 'climbing', 'hiking',
+        'ticket', 'tiket konser', 'event'
+    ],
+    'Shopping': [
+        'baju', 'celana', 'sepatu', 'tas', 'jam', 'aksesori',
+        'clothes', 'shoes', 'bag', 'watch', 'shirt', 'pants',
+        'dress', 'fashion', 'shopee', 'tokopedia', 'lazada',
+        'tokped', 'blibli', 'bukalapak', 'tiktok shop', 'tiktokshop',
+        'uniqlo', 'zara', 'h&m', 'pull&bear', 'pull and bear', 'adidas',
+        'nike', 'puma', 'decathlon', 'map club', 'sogo', 'metro',
+        'seibu', 'central dept', 'galeries lafayette', 'sarinah',
+        'matahari', 'ramayana', 'miniso', 'kkv', 'sociolla',
+        'ikea', 'informa', 'ace hardware', 'ace', 'hardware',
+        'guardian', 'watsons', 'watson', 'century', 'shopee mall'
+    ],
+    'Health': [
+        'obat', 'dokter', 'rumah sakit', 'apotek', 'vitamin',
+        'medicine', 'doctor', 'hospital', 'pharmacy', 'clinic', 'gym',
+        'kimia farma', 'k24', 'k-24', 'roxy', 'viva health', 'halodoc',
+        'alodokter', 'bpjs kesehatan', 'celebrity fitness', 'celfit',
+        'fitness first', 'golds gym', 'gold\'s gym', 'fithub', 'fit hub',
+        'megaclinic', 'prodia', 'lab', 'laboratorium', 'klinik', 'puskesmas',
+        'suplemen', 'masker', 'hand sanitizer'
+    ],
+    'Entertainment': [
+        'bioskop', 'film', 'game', 'netflix', 'spotify', 'youtube',
+        'movie', 'cinema', 'concert', 'ticket', 'karaoke',
+        'xxi', 'cgv', 'cinepolis', 'disney+', 'hotstar', 'hbo',
+        'prime video', 'viu', 'iqiyi', 'wetv', 'vidio', 'steam',
+        'playstation', 'nintendo', 'roblox', 'mobile legends', 'mlbb',
+        'pubg', 'genshin', 'valheim', 'minecraft', 'top up game',
+        'timezone', 'dufan', 'ancol', 'taman safari', 'klook',
+        'konser', 'tiket konser', 'karaoke family'
+    ],
+    'Investment & Savings': [
+        'reksadana', 'saham', 'emas', 'crypto', 'bitcoin', 'tabungan',
+        'invest', 'bibit', 'bareksa', 'ajaib', 'binance', 'tokocrypto',
+        'depo', 'deposito'
+    ],
+    'Education': [
+        'buku', 'kursus', 'spp', 'kuliah', 'sekolah', 'course', 'udemy',
+        'coursera', 'bootcamp', 'seminar', 'training', 'biaya sekolah',
+        'lks', 'ujian'
+    ],
+    'Donation & Charity': [
+        'zakat', 'sedekah', 'infak', 'sumbangan', 'perpuluhan', 'tithe',
+        'donasi', 'charity', 'tips', 'tip', 'parkir liar'
+    ]
+};
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const ADMIN_NUMBER = (process.env.ADMIN_NUMBER || '').trim();
@@ -61,6 +190,53 @@ async function logUserExpense(userName, amount, description, category, customDat
     }
     const timestamp = customDate || new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
     await sheet.addRow({ Timestamp: timestamp, Description: description, Amount: amount, Category: category });
+}
+
+async function checkBudgetLimits(userName, category, amount) {
+    if (!doc) await initGoogleSheets();
+    const sheet = doc.sheetsByTitle[userName];
+    if (!sheet) return '';
+
+    const rows = await sheet.getRows();
+    const now = moment().utcOffset('+07:00');
+    let categoryMtdTotal = 0;
+    let globalMtdTotal = 0;
+
+    rows.forEach(r => {
+        const amt = parseFloat(r.get('Amount'));
+        if (isNaN(amt)) return;
+
+        const timestampStr = r.get('Timestamp');
+        const rowDate = parseIdDate(timestampStr);
+        if (!rowDate) return;
+
+        const mDate = moment(rowDate);
+
+        if (mDate.isSame(now, 'month') && mDate.isSameOrBefore(now, 'day')) {
+            globalMtdTotal += amt;
+            if (r.get('Category') === category) {
+                categoryMtdTotal += amt;
+            }
+        }
+    });
+
+    let warnings = '';
+
+    // Check category limit
+    const categoryLimit = BUDGET_LIMITS[category];
+    if (categoryLimit && categoryMtdTotal > categoryLimit) {
+        const overage = categoryMtdTotal - categoryLimit;
+        warnings += `\n\n⚠️ *Category Budget Overage!*\nYour spending for *${category}* this month has exceeded the limit of Rp ${categoryLimit.toLocaleString('id-ID')} by *Rp ${overage.toLocaleString('id-ID')}* (Total MTD: Rp ${categoryMtdTotal.toLocaleString('id-ID')}).`;
+    }
+
+    // Check global limit
+    const globalLimit = BUDGET_LIMITS['Global'];
+    if (globalMtdTotal > globalLimit) {
+        const overage = globalMtdTotal - globalLimit;
+        warnings += `\n\n⚠️ *Global Budget Overage!*\nYour total spending this month has exceeded the global limit of Rp ${globalLimit.toLocaleString('id-ID')} by *Rp ${overage.toLocaleString('id-ID')}* (Total MTD: Rp ${globalMtdTotal.toLocaleString('id-ID')}).`;
+    }
+
+    return warnings;
 }
 
 // Parse Indonesian date format: "20/6/2026 17.15.00" or "20/6/2026, 17.15.00"
@@ -785,6 +961,132 @@ async function handleSplitBill(msg, userName, from, text) {
     }
 }
 
+async function handleScanCommand(msg, userName, from, text) {
+    const session = sessions[from];
+    if (!session) return;
+
+    try {
+        if (text.toLowerCase() === 'cancel') {
+            delete sessions[from];
+            await reply(msg, "❌ Scan cancelled.");
+            return;
+        }
+
+        let selectedItems = [];
+        if (text.toLowerCase() === 'all') {
+            selectedItems = [...session.items];
+        } else {
+            const indexes = text.split(/[\s,]+/).map(n => parseInt(n.trim(), 10) - 1);
+            indexes.forEach(idx => {
+                if (session.items[idx]) {
+                    selectedItems.push(session.items[idx]);
+                }
+            });
+        }
+
+        if (selectedItems.length === 0) {
+            await reply(msg, "⚠️ Invalid selection. Please reply with the numbers of the items you want to log (e.g. '1, 3') or 'all'.");
+            return;
+        }
+
+        let responseMsg = `✅ *Logged Selected Items:*\n━━━━━━━━━━━━━━━━━━━━\n`;
+        let totalLogged = 0;
+
+        for (const item of selectedItems) {
+            let category = 'Miscellaneous';
+            const searchText = item.name.toLowerCase();
+            for (const [cat, keys] of Object.entries(CATEGORIES)) {
+                if (keys.some(k => searchText.includes(k))) {
+                    category = cat;
+                    break;
+                }
+            }
+
+            await logUserExpense(userName, item.price, item.name, category, null);
+            totalLogged += item.price;
+            
+            const catEmojis = { 
+                'Food & Beverage': '🍔', 'Groceries': '🛒', 'Transportation': '🚗', 
+                'Utilities': '⚡', 'Bills': '🧾', 'Sport & Hobbies': '🏸',
+                'Shopping': '🛍️', 'Health': '💊', 'Entertainment': '🎬', 
+                'Investment & Savings': '📈', 'Education': '📚', 
+                'Donation & Charity': '🤝', 'Miscellaneous': '📦' 
+            };
+            responseMsg += `• ${catEmojis[category] || '📦'} *${item.name}* — Rp ${item.price.toLocaleString('id-ID')} (${category})\n`;
+        }
+
+        responseMsg += `\n*Total Logged:* Rp ${totalLogged.toLocaleString('id-ID')}`;
+
+        // Perform MTD budget ceiling check
+        const uniqueCats = [...new Set(selectedItems.map(item => {
+            let category = 'Miscellaneous';
+            const searchText = item.name.toLowerCase();
+            for (const [cat, keys] of Object.entries(CATEGORIES)) {
+                if (keys.some(k => searchText.includes(k))) {
+                    category = cat;
+                    break;
+                }
+            }
+            return category;
+        }))];
+
+        let budgetWarnings = '';
+        if (!doc) await initGoogleSheets();
+        const userSheet = doc.sheetsByTitle[userName];
+        if (userSheet) {
+            const rows = await userSheet.getRows();
+            const now = moment().utcOffset('+07:00');
+            
+            let globalMtdTotal = 0;
+            const categoryTotals = {};
+            uniqueCats.forEach(c => categoryTotals[c] = 0);
+
+            rows.forEach(r => {
+                const amt = parseFloat(r.get('Amount'));
+                if (isNaN(amt)) return;
+                
+                const timestampStr = r.get('Timestamp');
+                const rowDate = parseIdDate(timestampStr);
+                if (!rowDate) return;
+                
+                const mDate = moment(rowDate);
+                if (mDate.isSame(now, 'month') && mDate.isSameOrBefore(now, 'day')) {
+                    globalMtdTotal += amt;
+                    const rowCat = r.get('Category');
+                    if (uniqueCats.includes(rowCat)) {
+                        categoryTotals[rowCat] = (categoryTotals[rowCat] || 0) + amt;
+                    }
+                }
+            });
+
+            // Check each category
+            uniqueCats.forEach(cat => {
+                const categoryLimit = BUDGET_LIMITS[cat];
+                const catTotal = categoryTotals[cat] || 0;
+                if (categoryLimit && catTotal > categoryLimit) {
+                    const overage = catTotal - categoryLimit;
+                    budgetWarnings += `\n\n⚠️ *Category Budget Overage!*\nYour spending for *${cat}* this month has exceeded the limit of Rp ${categoryLimit.toLocaleString('id-ID')} by *Rp ${overage.toLocaleString('id-ID')}* (Total MTD: Rp ${catTotal.toLocaleString('id-ID')}).`;
+                }
+            });
+
+            // Check global
+            const globalLimit = BUDGET_LIMITS['Global'];
+            if (globalMtdTotal > globalLimit) {
+                const overage = globalMtdTotal - globalLimit;
+                budgetWarnings += `\n\n⚠️ *Global Budget Overage!*\nYour total spending this month has exceeded the global limit of Rp ${globalLimit.toLocaleString('id-ID')} by *Rp ${overage.toLocaleString('id-ID')}* (Total MTD: Rp ${globalMtdTotal.toLocaleString('id-ID')}).`;
+            }
+        }
+
+        responseMsg += budgetWarnings;
+
+        await reply(msg, responseMsg);
+        delete sessions[from];
+    } catch (e) {
+        console.error("Scan Selection Error:", e);
+        await reply(msg, "❌ Failed to process items. Please try again or type 'cancel' to exit.");
+    }
+}
+
 const CAT_EMOJIS = { 
     'Food & Beverage': '🍔', 
     'Groceries': '🛒', 
@@ -1432,6 +1734,9 @@ async function startWhatsAppBot() {
                         delete sessions[from];
                         return;
                     }
+                } else if (sessions[from].state === 'AWAITING_SCAN_SELECTION') {
+                    await handleScanCommand(msg, userName, from, rawText.trim());
+                    return;
                 } else {
                     await handleSplitBill(msg, userName, from, rawText.trim());
                     return;
@@ -1440,7 +1745,7 @@ async function startWhatsAppBot() {
 
             const helpKeywords = ['hi', 'hello', 'help', 'halo', 'p', '/help'];
             if (helpKeywords.includes(text)) {
-                let helpText = "Hello! 👋 I am your personal *Lifestyle Assistant*! 🌟\n\nHere is how I can help make your day easier:\n\n💸 *Money Management*\n• `/log [amount] for [item]` - Log a daily expense.\n• `/summary today` or `/summary mtd` - View your financial analytics.\n• `/splitbill` - Calculate shared bills with friends.\n\n📍 *Local Concierge*\n• `/find [place]` - Find the best spots near your current location (e.g., '/find coffee').";
+                let helpText = "Hello! 👋 I am your personal *Lifestyle Assistant*! 🌟\n\nHere is how I can help make your day easier:\n\n💸 *Money Management*\n• `/log [amount] for [item]` - Log a daily expense.\n• `/summary today` or `/summary mtd` - View your financial analytics.\n• `/splitbill` - Calculate shared bills with friends.\n• `/scan` - Scan receipt to log specific items.\n\n📍 *Local Concierge*\n• `/find [place]` - Find the best spots near your current location (e.g., '/find coffee').";
                 
                 if (isAdmin) {
                     helpText += "\n\n👑 *Admin Settings*\n• `/adduser [number] [name]` - Add a new user.";
@@ -1499,123 +1804,7 @@ async function startWhatsAppBot() {
                     description = description.replace(dateRegex, '').trim() || 'No description';
                 }
 
-                const CATEGORIES = {
-                    'Food & Beverage': [
-                        'makan', 'minum', 'kopi', 'nasi', 'ayam', 'bakso', 'sate', 'soto',
-                        'rendang', 'gudeg', 'rawon', 'pecel', 'tempe', 'tahu', 'sambal',
-                        'es teh', 'es jeruk', 'jus', 'susu', 'roti', 'kue', 'gorengan', 'martabak',
-                        'gofood', 'grabfood', 'shopeefood', 'mcd', 'kfc', 'starbucks', 'chatime',
-                        'warung', 'food', 'eat', 'lunch', 'dinner', 'breakfast', 'brunch', 'snack',
-                        'coffee', 'tea', 'juice', 'milk', 'bread', 'cake', 'pizza', 'burger',
-                        'rice', 'noodle', 'pasta', 'chicken', 'beef', 'fish', 'salad',
-                        'restaurant', 'cafe', 'bistro', 'dine', 'meal', 'dessert', 'ice cream',
-                        'boba', 'matcha', 'latte', 'espresso', 'americano', 'croissant',
-                        'sandwich', 'wrap', 'sushi', 'ramen', 'donut', 'waffle', 'pancake',
-                        'salt', 'chocolate', 'cookie', 'pastry', 'fries', 'padang',
-                        'gacoan', 'solaria', 'richeese', 'baba rafi', 'jco', 'j.co', 'bakmi gm',
-                        'cfc', 'marugame', 'udon', 'yoshinoya', 'sushi tei', 'kopi kenangan',
-                        'janji jiwa', 'fore coffee', 'excelso', 'mixue', 'tealive', 'dum dum',
-                        'koi the', 'koi thé', 'shaburi', 'kintan', 'holy cow', 'holycow',
-                        'burger king', 'bk', 'pizza hut', 'ph', 'dominos', 'domino\'s',
-                        'aw restaurant', 'a&w', 'mako cake', 'breadtalk', 'tous les jours',
-                        'harvest cake', 'sour sally', 'kebab', 'warmindo', 'angkringan',
-                        'pecel lele', 'soto betawi', 'martabak pecennongan', 'kopi nako',
-                        'kopimana', 'ta wan', 'tawan', 'imperial kitchen', 'dimsum',
-                        'd\'cost', 'dcost', 'hokben', 'hoka hoka bento', 'pepper lunch',
-                        'sushi go', 'sushigo', 'genki sushi', 'gindaco', 'rejuve', 're.juve',
-                        'boost juice', 'kopi toko djawa', 'anomali'
-                    ],
-                    'Groceries': [
-                        'supermarket', 'indomaret', 'alfamart', 'hypermart', 'aeon',
-                        'sayur', 'buah', 'bumbu', 'sabun', 'shampo', 'tissue',
-                        'grocery', 'market', 'store', 'mart', 'vegetable', 'fruit',
-                        'alfamidi', 'midi', 'superindo', 'super indo', 'carrefour', 'transmart',
-                        'giant', 'hero supermarket', 'lotte mart', 'lottemart', 'lotte grosir',
-                        'farmers market', 'ranch market', 'the foodhall', 'foodhall',
-                        'grand lucky', 'grandlucky', 'sayurbox', 'tanihub', 'kebut',
-                        'papaya fresh', 'toko kelontong', 'pasar', 'sembako', 'beras',
-                        'minyak goreng', 'telur', 'gula', 'garam', 'deterjen', 'pewangi',
-                        'pasta gigi', 'odol', 'sikat gigi', 'shampoo'
-                    ],
-                    'Transportation': [
-                        'bensin', 'grab', 'gojek', 'tol', 'parkir', 'pertamax',
-                        'taxi', 'uber', 'gas', 'fuel', 'train', 'bus', 'mrt',
-                        'ojek', 'transjakarta', 'commuter', 'travel', 'toll',
-                        'gocar', 'goride', 'grabcar', 'grabbike', 'maxim', 'indrive',
-                        'lrt', 'krl', 'commuterline', 'kereta', 'kai', 'damri',
-                        'pertalite', 'pertamax turbo', 'dexlite', 'pertamina dex',
-                        'pertamina', 'shell', 'shell super', 'v-power', 'bp fuel',
-                        'bp-akr', 'emoney', 'e-money', 'flazz', 'brizzi', 'tapcash',
-                        'e-toll', 'etoll', 'linkaja', 'ovo', 'dana', 'gopay',
-                        'astrapay', 'bluebird', 'blue bird', 'garuda', 'citilink',
-                        'lion air', 'batik air', 'sriwijaya', 'airasia', 'traveloka',
-                        'tiket.com', 'kai access', 'go-ride', 'go-car'
-                    ],
-                    'Utilities': [
-                        'listrik', 'token', 'internet', 'pulsa', 'air', 'pdam',
-                        'electric', 'water', 'phone', 'wifi', 'bill', 'subscription',
-                        'pln', 'telkomsel', 'indosat', 'im3', 'xl', 'tri', '3',
-                        'smartfren', 'axis', 'byu', 'by.u', 'indihome', 'first media',
-                        'firstmedia', 'biznet', 'myrepublic', 'cbn', 'mnc play', 'telkom',
-                        'pascabayar', 'postpaid', 'prabayar', 'prepaid', 'gas alam', 'pgn'
-                    ],
-                    'Bills': [
-                        'tagihan', 'bpjs', 'asuransi', 'pajak', 'tax', 'sewa', 'kost', 'kos',
-                        'rent', 'kontrakan', 'subscription', 'langganan', 'credit card', 'cc',
-                        'pinjol', 'cicilan', 'leasing'
-                    ],
-                    'Sport & Hobbies': [
-                        'badminton', 'futsal', 'gym', 'court', 'sewa lapangan', 'racket', 'raket',
-                        'tenis', 'tennis', 'running', 'lari', 'gowes', 'sepeda', 'renang',
-                        'swimming', 'fitness', 'yoga', 'pilates', 'golf', 'climbing', 'hiking',
-                        'ticket', 'tiket konser', 'event'
-                    ],
-                    'Shopping': [
-                        'baju', 'celana', 'sepatu', 'tas', 'jam', 'aksesori',
-                        'clothes', 'shoes', 'bag', 'watch', 'shirt', 'pants',
-                        'dress', 'fashion', 'shopee', 'tokopedia', 'lazada',
-                        'tokped', 'blibli', 'bukalapak', 'tiktok shop', 'tiktokshop',
-                        'uniqlo', 'zara', 'h&m', 'pull&bear', 'pull and bear', 'adidas',
-                        'nike', 'puma', 'decathlon', 'map club', 'sogo', 'metro',
-                        'seibu', 'central dept', 'galeries lafayette', 'sarinah',
-                        'matahari', 'ramayana', 'miniso', 'kkv', 'sociolla',
-                        'ikea', 'informa', 'ace hardware', 'ace', 'hardware',
-                        'guardian', 'watsons', 'watson', 'century', 'shopee mall'
-                    ],
-                    'Health': [
-                        'obat', 'dokter', 'rumah sakit', 'apotek', 'vitamin',
-                        'medicine', 'doctor', 'hospital', 'pharmacy', 'clinic', 'gym',
-                        'kimia farma', 'k24', 'k-24', 'roxy', 'viva health', 'halodoc',
-                        'alodokter', 'bpjs kesehatan', 'celebrity fitness', 'celfit',
-                        'fitness first', 'golds gym', 'gold\'s gym', 'fithub', 'fit hub',
-                        'megaclinic', 'prodia', 'lab', 'laboratorium', 'klinik', 'puskesmas',
-                        'suplemen', 'masker', 'hand sanitizer'
-                    ],
-                    'Entertainment': [
-                        'bioskop', 'film', 'game', 'netflix', 'spotify', 'youtube',
-                        'movie', 'cinema', 'concert', 'ticket', 'karaoke',
-                        'xxi', 'cgv', 'cinepolis', 'disney+', 'hotstar', 'hbo',
-                        'prime video', 'viu', 'iqiyi', 'wetv', 'vidio', 'steam',
-                        'playstation', 'nintendo', 'roblox', 'mobile legends', 'mlbb',
-                        'pubg', 'genshin', 'valheim', 'minecraft', 'top up game',
-                        'timezone', 'dufan', 'ancol', 'taman safari', 'klook',
-                        'konser', 'tiket konser', 'karaoke family'
-                    ],
-                    'Investment & Savings': [
-                        'reksadana', 'saham', 'emas', 'crypto', 'bitcoin', 'tabungan',
-                        'invest', 'bibit', 'bareksa', 'ajaib', 'binance', 'tokocrypto',
-                        'depo', 'deposito'
-                    ],
-                    'Education': [
-                        'buku', 'kursus', 'spp', 'kuliah', 'sekolah', 'course', 'udemy',
-                        'coursera', 'bootcamp', 'seminar', 'training', 'biaya sekolah',
-                        'lks', 'ujian'
-                    ],
-                    'Donation & Charity': [
-                        'zakat', 'sedekah', 'infak', 'sumbangan', 'perpuluhan', 'tithe',
-                        'donasi', 'charity', 'tips', 'tip', 'parkir liar'
-                    ]
-                };
+
                 let category = 'Miscellaneous';
                 const searchText = argsText.toLowerCase();
                 for (const [cat, keys] of Object.entries(CATEGORIES)) {
@@ -1625,6 +1814,7 @@ async function startWhatsAppBot() {
                 }
 
                 await logUserExpense(userName, amount, description, category, customDate);
+                const warnings = await checkBudgetLimits(userName, category, amount);
                 const catEmojis = { 
                     'Food & Beverage': '🍔', 
                     'Groceries': '🛒', 
@@ -1640,7 +1830,7 @@ async function startWhatsAppBot() {
                     'Donation & Charity': '🤝',
                     'Miscellaneous': '📦' 
                 };
-                await reply(msg, `✅ *Recorded!*\n\n📝 ${description}\n${catEmojis[category] || '📦'} ${category}\n💰 Rp ${amount.toLocaleString('id-ID')}\n📅 ${customDate || 'Today'}`);
+                await reply(msg, `✅ *Recorded!*\n\n📝 ${description}\n${catEmojis[category] || '📦'} ${category}\n💰 Rp ${amount.toLocaleString('id-ID')}\n📅 ${customDate || 'Today'}${warnings}`);
             }
             else if (command === '/summary') {
                 try {
@@ -1659,6 +1849,165 @@ async function startWhatsAppBot() {
                 } else {
                     await reply(msg, "Alright! 🧾 Please send me a photo of the receipt. If you don't have a photo, you can type/paste your items list directly instead (e.g., \"Badminton 163k\" or \"Pizza 100k, Coke 20k\").");
                 }
+            }
+            else if (command === '/scan') {
+                const isImage = msg.message?.imageMessage || msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage;
+                if (!isImage) {
+                    await reply(msg, "📸 Please send a photo of the receipt with `/scan` or reply to an existing receipt photo with `/scan`.");
+                    return;
+                }
+
+                await reply(msg, "Reading receipt with Google Cloud Vision OCR... 🤖 Please wait a moment.");
+
+                // 1. Download image
+                const targetMessage = msg.message?.imageMessage ? msg : { message: msg.message.extendedTextMessage.contextInfo.quotedMessage };
+                const mimetype = targetMessage.message.imageMessage.mimetype;
+                const buffer = await downloadMediaMessage(
+                    targetMessage,
+                    'buffer',
+                    {},
+                    { logger: pino({ level: 'silent' }) }
+                );
+
+                if (!buffer) {
+                    await reply(msg, "❌ Failed to download image. Try again.");
+                    return;
+                }
+
+                // 2. OCR using Google Cloud Vision
+                let ocrText = '';
+                try {
+                    const [visionResult] = await visionClient.textDetection({ image: { content: buffer } });
+                    ocrText = visionResult.fullTextAnnotation?.text || visionResult.textAnnotations?.[0]?.description || '';
+                } catch (ocrErr) {
+                    console.error("Google Cloud Vision OCR failed:", ocrErr);
+                }
+
+                let items = null;
+
+                // 3. Fallback to direct vision-based LLM if OCR failed or returned nothing
+                if (!ocrText) {
+                    console.log("No OCR text or Vision API failed. Falling back to direct LLM Vision...");
+                    const openRouterKey = process.env.OPENROUTER_API_KEY;
+                    if (openRouterKey) {
+                        const modelsToTry = [
+                            "google/gemma-4-31b-it:free",
+                            "nex-agi/nex-n2-pro:free",
+                            "nvidia/nemotron-nano-12b-v2-vl:free",
+                            "openrouter/free"
+                        ];
+                        for (const modelName of modelsToTry) {
+                            try {
+                                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                                    method: "POST",
+                                    headers: {
+                                        "Authorization": `Bearer ${openRouterKey}`,
+                                        "Content-Type": "application/json",
+                                        "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
+                                    },
+                                    body: JSON.stringify({
+                                        model: modelName,
+                                        messages: [{
+                                            role: "user",
+                                            content: [
+                                                { type: "text", text: "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers." },
+                                                { type: "image_url", image_url: { url: `data:${mimetype};base64,${buffer.toString('base64')}` } }
+                                            ]
+                                        }]
+                                    })
+                                });
+                                if (response.ok) {
+                                    const data = await response.json();
+                                    const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
+                                    items = JSON.parse(responseText);
+                                    break;
+                                }
+                            } catch (e) {
+                                console.warn(`Fallback OpenRouter model ${modelName} failed:`, e.message);
+                            }
+                        }
+                    }
+
+                    if (!items && genAI) {
+                        try {
+                            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+                            const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
+                            const imageParts = [{ inlineData: { data: buffer.toString('base64'), mimeType: mimetype } }];
+                            const result = await model.generateContent([prompt, ...imageParts]);
+                            const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
+                            items = JSON.parse(responseText);
+                        } catch (e) {
+                            console.error("Fallback Gemini direct vision failed:", e.message);
+                        }
+                    }
+                } else {
+                    // We have OCR text! Convert OCR text to JSON using LLM
+                    const promptText = "Extract all line items, services, products, or charges from the following OCR-extracted receipt text. Return a JSON array where each object has 'name' (string) and 'price' (number). Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nOCR Text:\n" + ocrText;
+
+                    const openRouterKey = process.env.OPENROUTER_API_KEY;
+                    if (openRouterKey) {
+                        const modelsToTry = [
+                            "meta-llama/llama-3.3-70b-instruct:free",
+                            "google/gemma-4-31b-it:free",
+                            "nex-agi/nex-n2-pro:free",
+                            "openrouter/free"
+                        ];
+                        for (const modelName of modelsToTry) {
+                            try {
+                                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                                    method: "POST",
+                                    headers: {
+                                        "Authorization": `Bearer ${openRouterKey}`,
+                                        "Content-Type": "application/json",
+                                        "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
+                                    },
+                                    body: JSON.stringify({
+                                        model: modelName,
+                                        messages: [{ role: "user", content: promptText }]
+                                    })
+                                });
+                                if (response.ok) {
+                                    const data = await response.json();
+                                    const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
+                                    items = JSON.parse(responseText);
+                                    break;
+                                }
+                            } catch (e) {
+                                console.warn(`OpenRouter OCR parsing failed with ${modelName}:`, e.message);
+                            }
+                        }
+                    }
+
+                    if (!items && genAI) {
+                        try {
+                            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+                            const result = await model.generateContent(promptText);
+                            const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
+                            items = JSON.parse(responseText);
+                        } catch (e) {
+                            console.error("Gemini OCR parsing failed:", e.message);
+                        }
+                    }
+                }
+
+                if (!items || items.length === 0) {
+                    await reply(msg, "❌ Sorry, I could not parse any items from the receipt. Please try again or log manually.");
+                    return;
+                }
+
+                // Store in session
+                sessions[from] = {
+                    state: 'AWAITING_SCAN_SELECTION',
+                    items: items
+                };
+
+                let prompt = `🧾 *Scanned Items:*\n\n`;
+                items.forEach((item, index) => {
+                    prompt += `${index + 1}. *${item.name}* — Rp ${item.price.toLocaleString('id-ID')}\n`;
+                });
+                prompt += `\nWhich items do you want to add to your expenses?\n`;
+                prompt += `Reply with numbers (e.g., '1, 3'), 'all', or type 'cancel' to exit.`;
+                await reply(msg, prompt);
             }
             else if (command === '/find') {
                 if (!argsText) {
