@@ -660,7 +660,7 @@ async function handleSplitBill(msg, userName, from, text) {
                                             content: [
                                                 {
                                                     type: "text",
-                                                    text: "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers."
+                                                    text: "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with a price of 25000). Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Do NOT include metadata rows like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', or 'Rounding' as separate items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers."
                                                 },
                                                 {
                                                     type: "image_url",
@@ -707,7 +707,7 @@ async function handleSplitBill(msg, userName, from, text) {
                         throw new Error("GEMINI_API_KEY is not configured in your .env file.");
                     }
                     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                    const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
+                    const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with a price of 25000). Distribute any tax, service charges, fees, or discounts proportionally so that the sum of the parsed item prices equals the final grand total paid. Do NOT include metadata rows like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', or 'Rounding' as separate items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
                     
                     const imageParts = [
                         {
@@ -733,7 +733,7 @@ async function handleSplitBill(msg, userName, from, text) {
                     // If local parser fails, fall back to LLM
                     await reply(msg, "Parsing your items text... 🤖");
                     const openRouterKey = process.env.OPENROUTER_API_KEY;
-                    const prompt = "Extract all line items, services, products, or charges from the following text description. Return a JSON array where each object has 'name' (string) and 'price' (number). Convert price shorthand notations like 'k', 'K', 'rb', 'ribu' to their full numeric values (e.g. 163k or 163K becomes 163000, 50k becomes 50000). Do not include tax, service charge, grand total, or subtotal if individual itemized list is present. If the text describes only a single expense, charge, or service without sub-items (e.g., 'Lapangan Badminton 163K'), treat that single charge as the line item. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nInput text:\n" + text;
+                    const prompt = "Extract all line items, services, products, or charges from the following text description. Return a JSON array where each object has 'name' (string) and 'price' (number). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with a price of 25000). Convert price shorthand notations like 'k', 'K', 'rb', 'ribu' to their full numeric values (e.g. 163k or 163K becomes 163000, 50k becomes 50000). Do not include tax, service charge, grand total, or subtotal if individual itemized list is present. If the text describes only a single expense, charge, or service without sub-items (e.g., 'Lapangan Badminton 163K'), treat that single charge as the line item. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nInput text:\n" + text;
 
                     if (openRouterKey) {
                         console.log("Using OpenRouter for text items parsing...");
@@ -810,6 +810,18 @@ async function handleSplitBill(msg, userName, from, text) {
                         items = JSON.parse(responseText);
                     }
                 }
+            }
+
+            if (items) {
+                items = items.filter(item => {
+                    const name = item.name.toLowerCase();
+                    return !name.includes('subtotal') &&
+                           !name.includes('grand total') &&
+                           !name.includes('grandtotal') &&
+                           !name.includes('service charge') &&
+                           !name.includes('tax') &&
+                           name !== 'total';
+                });
             }
 
             if (!items || items.length === 0) throw new Error("No items parsed");
@@ -1860,7 +1872,7 @@ async function startWhatsAppBot() {
 
             const helpKeywords = ['hi', 'hello', 'help', 'halo', 'p', '/help'];
             if (helpKeywords.includes(text)) {
-                let helpText = "Hello! 👋 I am your personal *Lifestyle Assistant*! 🌟\n\nHere is how I can help make your day easier:\n\n💸 *Money Management*\n• `/log [amount] for [item]` - Log a daily expense.\n• `/summary today` or `/summary mtd` - View your financial analytics.\n• `/splitbill` - Calculate shared bills with friends.\n• `/scan` - Scan receipt to log specific items.\n\n📍 *Local Concierge*\n• `/find [place]` - Find the best spots near your current location (e.g., '/find coffee').";
+                let helpText = "Hello! 👋 I am your personal *Lifestyle Assistant*! 🌟\n\nHere is how I can help make your day easier:\n\n💸 *Money Management*\n• `/log [amount] [description]` - Log a daily expense.\n• `/summary today` or `/summary mtd` - View your financial analytics.\n• `/splitbill` - Calculate shared bills with friends.\n• `/scan` - Scan receipt to log specific items.\n\n📍 *Local Concierge*\n• `/find [place]` - Find the best spots near your current location (e.g., '/find coffee').";
                 
                 if (isAdmin) {
                     helpText += "\n\n👑 *Admin Settings*\n• `/adduser [number] [name]` - Add a new user.";
@@ -2067,7 +2079,7 @@ async function startWhatsAppBot() {
                                         messages: [{
                                             role: "user",
                                             content: [
-                                                { type: "text", text: "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers." },
+                                                { type: "text", text: "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with a price of 25000). Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Do NOT include metadata rows like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', or 'Rounding' as separate items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers." },
                                                 { type: "image_url", image_url: { url: `data:${mimetype};base64,${buffer.toString('base64')}` } }
                                             ]
                                         }]
@@ -2088,7 +2100,7 @@ async function startWhatsAppBot() {
                     if (!items && genAI) {
                         try {
                             const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                            const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
+                            const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with a price of 25000). Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Do NOT include metadata rows like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', or 'Rounding' as separate items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
                             const imageParts = [{ inlineData: { data: buffer.toString('base64'), mimeType: mimetype } }];
                             const result = await model.generateContent([prompt, ...imageParts]);
                             const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
@@ -2099,7 +2111,7 @@ async function startWhatsAppBot() {
                     }
                 } else {
                     // We have OCR text! Convert OCR text to JSON using LLM
-                    const promptText = "Extract all line items, services, products, or charges from the following OCR-extracted receipt text. Return a JSON array where each object has 'name' (string) and 'price' (number). Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nOCR Text:\n" + ocrText;
+                    const promptText = "Extract all line items, services, products, or charges from the following OCR-extracted receipt text. Return a JSON array where each object has 'name' (string) and 'price' (number). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with a price of 25000). Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Do NOT include metadata rows like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', or 'Rounding' as separate items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nOCR Text:\n" + ocrText;
 
                     const openRouterKey = process.env.OPENROUTER_API_KEY;
                     if (openRouterKey) {
@@ -2145,6 +2157,18 @@ async function startWhatsAppBot() {
                             console.error("Gemini OCR parsing failed:", e.message);
                         }
                     }
+                }
+
+                if (items) {
+                    items = items.filter(item => {
+                        const name = item.name.toLowerCase();
+                        return !name.includes('subtotal') &&
+                               !name.includes('grand total') &&
+                               !name.includes('grandtotal') &&
+                               !name.includes('service charge') &&
+                               !name.includes('tax') &&
+                               name !== 'total';
+                    });
                 }
 
                 if (!items || items.length === 0) {
