@@ -1870,8 +1870,13 @@ async function startWhatsAppBot() {
                 }
             }
 
-            const helpKeywords = ['hi', 'hello', 'help', 'halo', 'p', '/help'];
-            if (helpKeywords.includes(text)) {
+            const isGreeting = /^\/?help+$/i.test(text) || 
+                               /^hi+$/i.test(text) || 
+                               /^he+y+$/i.test(text) || 
+                               /^he+l+o+$/i.test(text) || 
+                               /^ha+l+o+$/i.test(text) || 
+                               /^p+$/i.test(text);
+            if (isGreeting) {
                 let helpText = "Hello! 👋 I am your personal *Lifestyle Assistant*! 🌟\n\nHere is how I can help make your day easier:\n\n💸 *Money Management*\n• `/log [amount] [description]` - Log a daily expense.\n• `/summary today` or `/summary mtd` - View your financial analytics.\n• `/splitbill` - Calculate shared bills with friends.\n• `/scan` - Scan receipt to log specific items.\n\n📍 *Local Concierge*\n• `/find [place]` - Find the best spots near your current location (e.g., '/find coffee').";
                 
                 if (isAdmin) {
