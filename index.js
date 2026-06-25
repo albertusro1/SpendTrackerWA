@@ -299,7 +299,7 @@ function isMetadataItem(name) {
         'service charge', 'service chg', 'servicefee', 'service fee',
         'ta charge', 'take away', 'takeaway', 'packaging', 'packing',
         'tax', 'pjk', 'ppn', 'pb1', 'vat', 'gst',
-        'pembulatan', 'rounding',
+        'pembulatan', 'rounding', 'pembulan', 'pembulat',
         'edc', 'bca', 'mandiri', 'bri', 'bni', 'cimb', 'visa', 'mastercard', 'qris',
         'non tunai', 'nontunai', 'tunai', 'cash', 'kembali', 'change', 'payment', 'credit card', 'debit'
     ];
@@ -318,8 +318,8 @@ function processParsedItems(parsed) {
     }
     
     if (items && Array.isArray(items)) {
-        // Filter out metadata items first to get correct sum of actual items
-        items = items.filter(item => !isMetadataItem(item.name));
+        // Filter out metadata items AND any items with 0 or negative price
+        items = items.filter(item => !isMetadataItem(item.name) && item.price > 0);
         
         let gTotal = Number(grandTotal);
         if (!isNaN(gTotal) && gTotal > 0) {
