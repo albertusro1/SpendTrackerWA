@@ -684,14 +684,11 @@ async function handleSplitBill(msg, userName, from, text) {
                 if (openRouterKey) {
                     console.log("Using OpenRouter for receipt scanning...");
                     const modelsToTry = [
-                        "google/gemma-4-31b-it:free",
-                        "nex-agi/nex-n2-pro:free",
                         "nvidia/nemotron-nano-12b-v2-vl:free",
+                        "google/gemma-2-9b-it:free",
+                        "google/gemma-4-31b-it:free",
                         "openrouter/free"
                     ];
-
-                    let success = false;
-                    let lastError = null;
 
                     for (const modelName of modelsToTry) {
                         let timeoutId;
@@ -732,36 +729,29 @@ async function handleSplitBill(msg, userName, from, text) {
 
                             clearTimeout(timeoutId);
 
-                            if (!response.ok) {
+                            if (response.ok) {
+                                const data = await response.json();
+                                if (data.choices && data.choices.length > 0) {
+                                    const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
+                                    items = processParsedItems(JSON.parse(responseText));
+                                    if (items && items.length > 0) {
+                                        console.log(`Successfully parsed receipt using model: ${modelName}`);
+                                        break;
+                                    }
+                                }
+                            } else {
                                 const errText = await response.text();
-                                throw new Error(`Status ${response.status} - ${errText}`);
+                                console.warn(`OpenRouter model ${modelName} returned error status ${response.status}: ${errText}`);
                             }
-
-                            const data = await response.json();
-                            if (!data.choices || data.choices.length === 0) {
-                                throw new Error("No choices returned from OpenRouter");
-                            }
-
-                            const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                            items = processParsedItems(JSON.parse(responseText));
-                            success = true;
-                            console.log(`Successfully parsed receipt using model: ${modelName}`);
-                            break;
                         } catch (err) {
                             if (timeoutId) clearTimeout(timeoutId);
                             console.warn(`Failed with model ${modelName}:`, err.message);
-                            lastError = err;
                         }
                     }
+                }
 
-                    if (!success) {
-                        throw new Error(`All OpenRouter models failed. Last error: ${lastError ? lastError.message : 'Unknown error'}`);
-                    }
-                } else {
-                    console.log("Using direct Gemini API for receipt scanning...");
-                    if (!genAI) {
-                        throw new Error("GEMINI_API_KEY is not configured in your .env file.");
-                    }
+                if (!items && genAI) {
+                    console.log("Falling back to direct Gemini API for receipt scanning...");
                     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
                     const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers.";
                     
@@ -776,7 +766,11 @@ async function handleSplitBill(msg, userName, from, text) {
                     
                     const result = await model.generateContent([prompt, ...imageParts]);
                     const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                    items = processParsedItems(JSON.parse(responseText));
+                    items = processParsedItems(JSON.parse(result.response.text().trim().replace(/```json/g, '').replace(/```/g, '')));
+                }
+
+                if (!items) {
+                    throw new Error("Failed to parse receipt from image using OpenRouter and Gemini.");
                 }
             } else {
                 // Text receipt input
@@ -795,13 +789,10 @@ async function handleSplitBill(msg, userName, from, text) {
                         console.log("Using OpenRouter for text items parsing...");
                         const modelsToTry = [
                             "meta-llama/llama-3.3-70b-instruct:free",
+                            "google/gemma-2-9b-it:free",
                             "google/gemma-4-31b-it:free",
-                            "nex-agi/nex-n2-pro:free",
                             "openrouter/free"
                         ];
-
-                        let success = false;
-                        let lastError = null;
 
                         for (const modelName of modelsToTry) {
                             let timeoutId;
@@ -831,39 +822,36 @@ async function handleSplitBill(msg, userName, from, text) {
 
                                 clearTimeout(timeoutId);
 
-                                if (!response.ok) {
+                                if (response.ok) {
+                                    const data = await response.json();
+                                    if (data.choices && data.choices.length > 0) {
+                                        const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
+                                        items = processParsedItems(JSON.parse(responseText));
+                                        if (items && items.length > 0) {
+                                            break;
+                                        }
+                                    }
+                                } else {
                                     const errText = await response.text();
-                                    throw new Error(`Status ${response.status} - ${errText}`);
+                                    console.warn(`Text parsing: OpenRouter model ${modelName} returned error status ${response.status}: ${errText}`);
                                 }
-
-                                const data = await response.json();
-                                if (!data.choices || data.choices.length === 0) {
-                                    throw new Error("No choices returned from OpenRouter");
-                                }
-
-                                const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                                items = processParsedItems(JSON.parse(responseText));
-                                success = true;
-                                break;
                             } catch (err) {
                                 if (timeoutId) clearTimeout(timeoutId);
                                 console.warn(`Failed with model ${modelName} for text parsing:`, err.message);
-                                lastError = err;
                             }
                         }
+                    }
 
-                        if (!success) {
-                            throw new Error(`All OpenRouter models failed. Last error: ${lastError ? lastError.message : 'Unknown error'}`);
-                        }
-                    } else {
-                        console.log("Using direct Gemini API for text items parsing...");
-                        if (!genAI) {
-                            throw new Error("GEMINI_API_KEY is not configured in your .env file.");
-                        }
+                    if (!items && genAI) {
+                        console.log("Falling back to direct Gemini API for text items parsing...");
                         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
                         const result = await model.generateContent(prompt);
                         const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
                         items = processParsedItems(JSON.parse(responseText));
+                    }
+
+                    if (!items) {
+                        throw new Error("Failed to parse text receipt using OpenRouter and Gemini.");
                     }
                 }
             }
