@@ -296,9 +296,9 @@ function isMetadataItem(name) {
         'subtotal', 'sub total',
         'grand total', 'grandtotal',
         'total',
-        'service charge', 'service chg', 'servicefee', 'service fee',
+        'service charge', 'service chg', 'servicefee', 'service fee', 'service', 'charge', 'fee',
         'ta charge', 'take away', 'takeaway', 'packaging', 'packing',
-        'tax', 'pjk', 'ppn', 'pb1', 'vat', 'gst',
+        'tax', 'pjk', 'pkj', 'pajak', 'ppn', 'pb1', 'vat', 'resto', 'gst',
         'pembulatan', 'rounding', 'pembulan', 'pembulat',
         'edc', 'bca', 'mandiri', 'bri', 'bni', 'cimb', 'visa', 'mastercard', 'qris',
         'non tunai', 'nontunai', 'tunai', 'cash', 'kembali', 'change', 'payment', 'credit card', 'debit'
@@ -922,7 +922,24 @@ async function handleSplitBill(msg, userName, from, text) {
             session.currentItemIndex = 0;
             session.state = 'ASSIGNING_OWNERS';
             
-            await askForOwners(msg, session, from);
+            // Auto-assign metadata items (tax, service, rounding, etc.) to all participants
+            receipt.items.forEach(item => {
+                if (isMetadataItem(item.name)) {
+                    item.owners = [...receipt.participants];
+                }
+            });
+
+            // Find first item that needs assignment
+            while (session.currentItemIndex < receipt.items.length && receipt.items[session.currentItemIndex].owners.length > 0) {
+                session.currentItemIndex++;
+            }
+
+            if (session.currentItemIndex >= receipt.items.length) {
+                session.state = 'AWAITING_MORE_RECEIPTS';
+                await reply(msg, `All items for Bill ${session.receipts.length} have been assigned! 🧾\n\nDo you want to add another receipt to this split session?\n- Upload another photo of a receipt.\n- Type/paste another items list (e.g. "Badminton 163k").\n- Or reply 'no' / 'done' to proceed to payment.`);
+            } else {
+                await askForOwners(msg, session, from);
+            }
         } 
         else if (session.state === 'ASSIGNING_OWNERS') {
             const receipt = session.receipts[session.currentReceiptIndex];
@@ -946,6 +963,11 @@ async function handleSplitBill(msg, userName, from, text) {
             item.owners = validOwners;
             
             session.currentItemIndex++;
+            // Skip any items that already have owners (e.g. auto-assigned metadata)
+            while (session.currentItemIndex < receipt.items.length && receipt.items[session.currentItemIndex].owners.length > 0) {
+                session.currentItemIndex++;
+            }
+
             if (session.currentItemIndex >= receipt.items.length) {
                 session.state = 'AWAITING_MORE_RECEIPTS';
                 await reply(msg, `All items for Bill ${session.receipts.length} have been assigned! 🧾\n\nDo you want to add another receipt to this split session?\n- Upload another photo of a receipt.\n- Type/paste another items list (e.g. "Badminton 163k").\n- Or reply 'no' / 'done' to proceed to payment.`);
