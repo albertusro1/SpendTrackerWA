@@ -306,6 +306,45 @@ function isMetadataItem(name) {
     return blacklist.some(term => n.includes(term));
 }
 
+function processParsedItems(parsed) {
+    let items = null;
+    let grandTotal = null;
+    
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        items = parsed.items;
+        grandTotal = parsed.grand_total;
+    } else if (Array.isArray(parsed)) {
+        items = parsed;
+    }
+    
+    if (items && Array.isArray(items)) {
+        // Filter out metadata items first to get correct sum of actual items
+        items = items.filter(item => !isMetadataItem(item.name));
+        
+        let gTotal = Number(grandTotal);
+        if (!isNaN(gTotal) && gTotal > 0) {
+            const itemsSum = items.reduce((sum, item) => sum + item.price, 0);
+            console.log(`[processParsedItems] Sum of items: ${itemsSum}, Grand Total: ${gTotal}`);
+            if (itemsSum > 0 && itemsSum !== gTotal) {
+                const ratio = gTotal / itemsSum;
+                console.log(`[processParsedItems] Scaling prices by ratio: ${ratio}`);
+                let runningSum = 0;
+                items.forEach((item, index) => {
+                    if (index === items.length - 1) {
+                        item.price = gTotal - runningSum;
+                    } else {
+                        item.price = Math.round(item.price * ratio);
+                        runningSum += item.price;
+                    }
+                });
+                const finalSum = items.reduce((sum, item) => sum + item.price, 0);
+                console.log(`[processParsedItems] Final sum of items after scaling: ${finalSum}`);
+            }
+        }
+    }
+    return items;
+}
+
 async function askForOwners(msg, session, from) {
     const receipt = session.receipts[session.currentReceiptIndex];
     const item = receipt.items[session.currentItemIndex];
@@ -677,7 +716,7 @@ async function handleSplitBill(msg, userName, from, text) {
                                             content: [
                                                 {
                                                     type: "text",
-                                                    text: "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with a price of 25000). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') as separate items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers."
+                                                    text: "Extract all line items, services, products, or charges from this receipt. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers."
                                                 },
                                                 {
                                                     type: "image_url",
@@ -704,7 +743,7 @@ async function handleSplitBill(msg, userName, from, text) {
                             }
 
                             const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                            items = JSON.parse(responseText);
+                            items = processParsedItems(JSON.parse(responseText));
                             success = true;
                             console.log(`Successfully parsed receipt using model: ${modelName}`);
                             break;
@@ -724,7 +763,7 @@ async function handleSplitBill(msg, userName, from, text) {
                         throw new Error("GEMINI_API_KEY is not configured in your .env file.");
                     }
                     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                    const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with a price of 25000). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Distribute any tax, service charges, fees, or discounts proportionally so that the sum of the parsed item prices equals the final grand total paid. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') as separate items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
+                    const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers.";
                     
                     const imageParts = [
                         {
@@ -737,7 +776,7 @@ async function handleSplitBill(msg, userName, from, text) {
                     
                     const result = await model.generateContent([prompt, ...imageParts]);
                     const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                    items = JSON.parse(responseText);
+                    items = processParsedItems(JSON.parse(responseText));
                 }
             } else {
                 // Text receipt input
@@ -750,7 +789,7 @@ async function handleSplitBill(msg, userName, from, text) {
                     // If local parser fails, fall back to LLM
                     await reply(msg, "Parsing your items text... 🤖");
                     const openRouterKey = process.env.OPENROUTER_API_KEY;
-                    const prompt = "Extract all line items, services, products, or charges from the following text description. Return a JSON array where each object has 'name' (string) and 'price' (number). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with a price of 25000). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Convert price shorthand notations like 'k', 'K', 'rb', 'ribu' to their full numeric values (e.g. 163k or 163K becomes 163000, 50k becomes 50000). Do not include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') as separate items. If the text describes only a single expense, charge, or service without sub-items (e.g., 'Lapangan Badminton 163K'), treat that single charge as the line item. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nInput text:\n" + text;
+                    const prompt = "Extract all line items, services, products, or charges from the following text description. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If 'grand_total' is not explicitly mentioned or cannot be inferred, set it to null. If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Convert price shorthand notations like 'k', 'K', 'rb', 'ribu' to their full numeric values (e.g. 163k or 163K becomes 163000, 50k becomes 50000). Do not include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. If the text describes only a single expense, charge, or service without sub-items (e.g., 'Lapangan Badminton 163K'), treat that single charge as the line item. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers.\n\nInput text:\n" + text;
 
                     if (openRouterKey) {
                         console.log("Using OpenRouter for text items parsing...");
@@ -803,7 +842,7 @@ async function handleSplitBill(msg, userName, from, text) {
                                 }
 
                                 const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                                items = JSON.parse(responseText);
+                                items = processParsedItems(JSON.parse(responseText));
                                 success = true;
                                 break;
                             } catch (err) {
@@ -824,13 +863,13 @@ async function handleSplitBill(msg, userName, from, text) {
                         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
                         const result = await model.generateContent(prompt);
                         const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                        items = JSON.parse(responseText);
+                        items = processParsedItems(JSON.parse(responseText));
                     }
                 }
             }
 
             if (items) {
-                items = items.filter(item => !isMetadataItem(item.name));
+                items = processParsedItems(items);
             }
 
             if (!items || items.length === 0) throw new Error("No items parsed");
@@ -2093,7 +2132,7 @@ async function startWhatsAppBot() {
                                         messages: [{
                                             role: "user",
                                             content: [
-                                                { type: "text", text: "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with a price of 25000). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') as separate items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers." },
+                                                { type: "text", text: "Extract all line items, services, products, or charges from this receipt. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers." },
                                                 { type: "image_url", image_url: { url: `data:${mimetype};base64,${buffer.toString('base64')}` } }
                                             ]
                                         }]
@@ -2102,7 +2141,7 @@ async function startWhatsAppBot() {
                                 if (response.ok) {
                                     const data = await response.json();
                                     const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                                    items = JSON.parse(responseText);
+                                    items = processParsedItems(JSON.parse(responseText));
                                     break;
                                 }
                             } catch (e) {
@@ -2114,18 +2153,18 @@ async function startWhatsAppBot() {
                     if (!items && genAI) {
                         try {
                             const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                            const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON array where each object has 'name' (string) and 'price' (number). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with a price of 25000). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') as separate items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.";
+                            const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers.";
                             const imageParts = [{ inlineData: { data: buffer.toString('base64'), mimeType: mimetype } }];
                             const result = await model.generateContent([prompt, ...imageParts]);
                             const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                            items = JSON.parse(responseText);
+                            items = processParsedItems(JSON.parse(responseText));
                         } catch (e) {
                             console.error("Fallback Gemini direct vision failed:", e.message);
                         }
                     }
                 } else {
                     // We have OCR text! Convert OCR text to JSON using LLM
-                    const promptText = "Extract all line items, services, products, or charges from the following OCR-extracted receipt text. Return a JSON array where each object has 'name' (string) and 'price' (number). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with a price of 25000). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Distribute any tax, service charges, fees, or discounts proportionally to the item prices so that the sum of the parsed item prices equals the final grand total paid. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') as separate items. Respond ONLY with the JSON array, no markdown formatting. Ensure numbers are integers.\n\nOCR Text:\n" + ocrText;
+                    const promptText = "Extract all line items, services, products, or charges from the following OCR-extracted receipt text. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If 'grand_total' is not explicitly mentioned or cannot be inferred, set it to null. If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers.\n\nOCR Text:\n" + ocrText;
 
                     const openRouterKey = process.env.OPENROUTER_API_KEY;
                     if (openRouterKey) {
@@ -2152,7 +2191,7 @@ async function startWhatsAppBot() {
                                 if (response.ok) {
                                     const data = await response.json();
                                     const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                                    items = JSON.parse(responseText);
+                                    items = processParsedItems(JSON.parse(responseText));
                                     break;
                                 }
                             } catch (e) {
@@ -2166,7 +2205,7 @@ async function startWhatsAppBot() {
                             const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
                             const result = await model.generateContent(promptText);
                             const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                            items = JSON.parse(responseText);
+                            items = processParsedItems(JSON.parse(responseText));
                         } catch (e) {
                             console.error("Gemini OCR parsing failed:", e.message);
                         }
@@ -2174,7 +2213,7 @@ async function startWhatsAppBot() {
                 }
 
                 if (items) {
-                    items = items.filter(item => !isMetadataItem(item.name));
+                    items = processParsedItems(items);
                 }
 
                 if (!items || items.length === 0) {
