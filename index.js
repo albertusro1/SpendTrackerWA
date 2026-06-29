@@ -681,93 +681,158 @@ async function handleSplitBill(msg, userName, from, text) {
                 await reply(msg, "Reading receipt with AI... 🤖 Please wait a moment.");
                 
                 const openRouterKey = process.env.OPENROUTER_API_KEY;
-                if (openRouterKey) {
-                    console.log("Using OpenRouter for receipt scanning...");
-                    const modelsToTry = [
-                        "meta-llama/llama-3.2-11b-vision-instruct:free",
-                        "qwen/qwen-2-vl-7b-instruct:free",
-                        "nvidia/nemotron-nano-12b-v2-vl:free",
-                        "google/gemma-4-31b-it:free",
-                        "openrouter/free"
-                    ];
+                
+                // 1. OCR using Google Cloud Vision
+                let ocrText = '';
+                try {
+                    const [visionResult] = await visionClient.textDetection({ image: { content: buffer } });
+                    ocrText = visionResult.fullTextAnnotation?.text || visionResult.textAnnotations?.[0]?.description || '';
+                    console.log("[OCR Text Extracted]:", ocrText);
+                } catch (ocrErr) {
+                    console.error("Google Cloud Vision OCR failed in handleSplitBill:", ocrErr);
+                }
 
-                    for (const modelName of modelsToTry) {
-                        let timeoutId;
-                        try {
-                            console.log(`Trying OpenRouter model: ${modelName}`);
-                            const controller = new AbortController();
-                            timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
+                if (ocrText) {
+                    console.log("OCR text extracted successfully in handleSplitBill. Parsing text via LLM...");
+                    const promptText = "Extract all line items, services, products, or charges from the following OCR-extracted receipt text. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If 'grand_total' is not explicitly mentioned or cannot be inferred, set it to null. If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers.\n\nOCR Text:\n" + ocrText;
 
-                            const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                                method: "POST",
-                                headers: {
-                                    "Authorization": `Bearer ${openRouterKey}`,
-                                    "Content-Type": "application/json",
-                                    "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
-                                },
-                                signal: controller.signal,
-                                body: JSON.stringify({
-                                    model: modelName,
-                                    messages: [
-                                        {
-                                            role: "user",
-                                            content: [
-                                                {
-                                                    type: "text",
-                                                    text: "Extract all line items, services, products, or charges from this receipt. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers."
-                                                },
-                                                {
-                                                    type: "image_url",
-                                                    image_url: {
-                                                        url: `data:${mimetype};base64,${buffer.toString('base64')}`
-                                                    }
-                                                }
-                                            ]
-                                        }
-                                    ]
-                                })
-                            });
-
-                            clearTimeout(timeoutId);
-
-                            if (response.ok) {
-                                const data = await response.json();
-                                if (data.choices && data.choices.length > 0) {
+                    if (openRouterKey) {
+                        const modelsToTry = [
+                            "meta-llama/llama-3.3-70b-instruct:free",
+                            "google/gemma-2-9b-it:free",
+                            "google/gemma-4-31b-it:free",
+                            "openrouter/free"
+                        ];
+                        for (const modelName of modelsToTry) {
+                            try {
+                                console.log(`Trying OpenRouter model for OCR text parsing: ${modelName}`);
+                                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                                    method: "POST",
+                                    headers: {
+                                        "Authorization": `Bearer ${openRouterKey}`,
+                                        "Content-Type": "application/json",
+                                        "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
+                                    },
+                                    body: JSON.stringify({
+                                        model: modelName,
+                                        messages: [{ role: "user", content: promptText }]
+                                    })
+                                });
+                                if (response.ok) {
+                                    const data = await response.json();
                                     const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
+                                    console.log(`[OCR LLM Response ${modelName}]:`, responseText);
                                     items = processParsedItems(JSON.parse(responseText));
+                                    console.log(`[Processed Items ${modelName}]:`, JSON.stringify(items));
                                     if (items && items.length > 0) {
-                                        console.log(`Successfully parsed receipt using model: ${modelName}`);
                                         break;
                                     }
                                 }
-                            } else {
-                                const errText = await response.text();
-                                console.warn(`OpenRouter model ${modelName} returned error status ${response.status}: ${errText}`);
+                            } catch (e) {
+                                console.warn(`OpenRouter OCR parsing failed with ${modelName}:`, e.message);
                             }
-                        } catch (err) {
-                            if (timeoutId) clearTimeout(timeoutId);
-                            console.warn(`Failed with model ${modelName}:`, err.message);
+                        }
+                    }
+
+                    if (!items && genAI) {
+                        try {
+                            console.log("Falling back to direct Gemini OCR text parsing...");
+                            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+                            const result = await model.generateContent(promptText);
+                            const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
+                            console.log("[OCR Gemini Response]:", responseText);
+                            items = processParsedItems(JSON.parse(responseText));
+                            console.log("[Processed Items Gemini]:", JSON.stringify(items));
+                        } catch (e) {
+                            console.error("Gemini OCR parsing failed in handleSplitBill:", e.message);
                         }
                     }
                 }
 
-                if (!items && genAI) {
-                    console.log("Falling back to direct Gemini API for receipt scanning...");
-                    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                    const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers.";
-                    
-                    const imageParts = [
-                        {
-                            inlineData: {
-                                data: buffer.toString('base64'),
-                                mimeType: mimetype
+                // If OCR failed or didn't yield items, fall back to direct Vision LLM
+                if (!items) {
+                    console.log("No OCR text or OCR parsing yielded no items. Parsing image directly via Vision LLM...");
+                    if (openRouterKey) {
+                        const modelsToTry = [
+                            "meta-llama/llama-3.2-11b-vision-instruct:free",
+                            "qwen/qwen-2-vl-7b-instruct:free",
+                            "nvidia/nemotron-nano-12b-v2-vl:free",
+                            "google/gemma-4-31b-it:free",
+                            "openrouter/free"
+                        ];
+
+                        for (const modelName of modelsToTry) {
+                            let timeoutId;
+                            try {
+                                console.log(`Trying OpenRouter Vision model: ${modelName}`);
+                                const controller = new AbortController();
+                                timeoutId = setTimeout(() => controller.abort(), 20000);
+
+                                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                                    method: "POST",
+                                    headers: {
+                                        "Authorization": `Bearer ${openRouterKey}`,
+                                        "Content-Type": "application/json",
+                                        "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
+                                    },
+                                    signal: controller.signal,
+                                    body: JSON.stringify({
+                                        model: modelName,
+                                        messages: [
+                                            {
+                                                role: "user",
+                                                content: [
+                                                    {
+                                                        type: "text",
+                                                        text: "Extract all line items, services, products, or charges from this receipt. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers."
+                                                    },
+                                                    {
+                                                        type: "image_url",
+                                                        image_url: {
+                                                            url: `data:${mimetype};base64,${buffer.toString('base64')}`
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    })
+                                });
+
+                                clearTimeout(timeoutId);
+
+                                if (response.ok) {
+                                    const data = await response.json();
+                                    if (data.choices && data.choices.length > 0) {
+                                        const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
+                                        console.log(`[Vision LLM Response ${modelName}]:`, responseText);
+                                        items = processParsedItems(JSON.parse(responseText));
+                                        console.log(`[Processed Items ${modelName}]:`, JSON.stringify(items));
+                                        if (items && items.length > 0) {
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    const errText = await response.text();
+                                    console.warn(`OpenRouter Vision model ${modelName} returned error status ${response.status}: ${errText}`);
+                                }
+                            } catch (err) {
+                                if (timeoutId) clearTimeout(timeoutId);
+                                console.warn(`Failed with model ${modelName}:`, err.message);
                             }
                         }
-                    ];
-                    
-                    const result = await model.generateContent([prompt, ...imageParts]);
-                    const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                    items = processParsedItems(JSON.parse(result.response.text().trim().replace(/```json/g, '').replace(/```/g, '')));
+                    }
+
+                    if (!items && genAI) {
+                        console.log("Falling back to direct Gemini API for receipt scanning...");
+                        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+                        const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers.";
+                        const imageParts = [{ inlineData: { data: buffer.toString('base64'), mimeType: mimetype } }];
+                        const result = await model.generateContent([prompt, ...imageParts]);
+                        const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
+                        console.log("[Vision Gemini Response]:", responseText);
+                        items = processParsedItems(JSON.parse(result.response.text().trim().replace(/```json/g, '').replace(/```/g, '')));
+                        console.log("[Processed Items Gemini]:", JSON.stringify(items));
+                    }
                 }
 
                 if (!items) {
