@@ -684,8 +684,9 @@ async function handleSplitBill(msg, userName, from, text) {
                 if (openRouterKey) {
                     console.log("Using OpenRouter for receipt scanning...");
                     const modelsToTry = [
+                        "meta-llama/llama-3.2-11b-vision-instruct:free",
+                        "qwen/qwen-2-vl-7b-instruct:free",
                         "nvidia/nemotron-nano-12b-v2-vl:free",
-                        "google/gemma-2-9b-it:free",
                         "google/gemma-4-31b-it:free",
                         "openrouter/free"
                     ];
@@ -2123,9 +2124,10 @@ async function startWhatsAppBot() {
                     const openRouterKey = process.env.OPENROUTER_API_KEY;
                     if (openRouterKey) {
                         const modelsToTry = [
-                            "google/gemma-4-31b-it:free",
-                            "nex-agi/nex-n2-pro:free",
+                            "meta-llama/llama-3.2-11b-vision-instruct:free",
+                            "qwen/qwen-2-vl-7b-instruct:free",
                             "nvidia/nemotron-nano-12b-v2-vl:free",
+                            "google/gemma-4-31b-it:free",
                             "openrouter/free"
                         ];
                         for (const modelName of modelsToTry) {
