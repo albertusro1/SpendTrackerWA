@@ -289,19 +289,45 @@ async function reply(msg, textOrMedia, options = {}) {
     }
 }
 
+// ===== Shared Receipt Parsing Prompts =====
+const RECEIPT_ITEM_RULES = `Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid (after all taxes, service charges, discounts, rounding, etc. are applied). If 'grand_total' is not explicitly mentioned or cannot be inferred, set it to null.
+
+CRITICAL - Quantity handling: Many receipts show quantities in the format 'Qty x UnitPrice = LineTotal' (e.g., '3 x 46,000 = 138,000' or '2x24.000= 48.000'). You MUST read the quantity column carefully. If an item has quantity > 1, split it into that many individual line items, each with the UNIT price (NOT the line total). For example, '3 x 46,000 = 138,000' for 'Paket Ayam Kremes' must become 3 separate objects: 'Paket Ayam Kremes (1/3)' at 46000, 'Paket Ayam Kremes (2/3)' at 46000, 'Paket Ayam Kremes (3/3)' at 46000. Do NOT use the line total (138000) as the price. Always use the unit price.
+
+Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next). You MUST merge these multi-line names into a single item (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price.
+
+Do NOT include any of these in the 'items' array:
+- Metadata/header rows (e.g., 'Customer X Orang', 'Dine In', 'Table', 'Cashier', 'Waiter', 'Date')
+- Tax/fee rows (e.g., 'Subtotal', 'Sub Total', 'Grand Total', 'Total', 'Total Food', 'Total Beverage', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PB1', 'PJK Resto', 'Pajak')
+- Payment rows (e.g., 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali', 'Debit', 'Credit Card', 'QRIS')
+- Modifier/note lines (lines starting with '#' or '*', e.g., '#Dada', '*Paket Es Teh Tawar', '# 1 telor dadar tanpa cabe (MENU REQUEST)')
+- Items with a price of 0 or no price
+
+Respond ONLY with the JSON object, no markdown formatting. Ensure all prices are integers.`;
+
+const RECEIPT_OCR_PROMPT_PREFIX = "Extract all line items, services, products, or charges from the following OCR-extracted receipt text. " + RECEIPT_ITEM_RULES + "\n\nOCR Text:\n";
+
+const RECEIPT_VISION_PROMPT = "Extract all line items, services, products, or charges from this receipt. " + RECEIPT_ITEM_RULES;
+
+const RECEIPT_TEXT_PROMPT_PREFIX = "Extract all line items, services, products, or charges from the following text description. " + RECEIPT_ITEM_RULES + ` Convert price shorthand notations like 'k', 'K', 'rb', 'ribu' to their full numeric values (e.g. 163k or 163K becomes 163000, 50k becomes 50000). If the text describes only a single expense, charge, or service without sub-items (e.g., 'Lapangan Badminton 163K'), treat that single charge as the line item.\n\nInput text:\n`;
+
 function isMetadataItem(name) {
     if (!name) return false;
     const n = name.toLowerCase().trim();
+    // Skip modifier/note lines starting with # or *
+    if (n.startsWith('#') || n.startsWith('*')) return true;
     const blacklist = [
         'subtotal', 'sub total',
         'grand total', 'grandtotal',
+        'total food', 'total beverage', 'total minuman', 'total makanan',
         'total',
         'service charge', 'service chg', 'servicefee', 'service fee', 'service', 'charge', 'fee',
         'ta charge', 'take away', 'takeaway', 'packaging', 'packing',
         'tax', 'pjk', 'pkj', 'pajak', 'ppn', 'pb1', 'vat', 'resto', 'gst',
         'pembulatan', 'rounding', 'pembulan', 'pembulat',
         'edc', 'bca', 'mandiri', 'bri', 'bni', 'cimb', 'visa', 'mastercard', 'qris',
-        'non tunai', 'nontunai', 'tunai', 'cash', 'kembali', 'change', 'payment', 'credit card', 'debit'
+        'non tunai', 'nontunai', 'tunai', 'cash', 'kembali', 'change', 'payment', 'credit card', 'debit',
+        'customer', 'dine in', 'dinein', 'dine-in', 'table', 'kasir', 'cashier', 'waiter', 'menu request'
     ];
     return blacklist.some(term => n.includes(term));
 }
@@ -694,7 +720,7 @@ async function handleSplitBill(msg, userName, from, text) {
 
                 if (ocrText) {
                     console.log("OCR text extracted successfully in handleSplitBill. Parsing text via LLM...");
-                    const promptText = "Extract all line items, services, products, or charges from the following OCR-extracted receipt text. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If 'grand_total' is not explicitly mentioned or cannot be inferred, set it to null. If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers.\n\nOCR Text:\n" + ocrText;
+                    const promptText = RECEIPT_OCR_PROMPT_PREFIX + ocrText;
 
                     if (openRouterKey) {
                         const modelsToTry = [
@@ -784,7 +810,7 @@ async function handleSplitBill(msg, userName, from, text) {
                                                 content: [
                                                     {
                                                         type: "text",
-                                                        text: "Extract all line items, services, products, or charges from this receipt. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers."
+                                                        text: RECEIPT_VISION_PROMPT
                                                     },
                                                     {
                                                         type: "image_url",
@@ -825,7 +851,7 @@ async function handleSplitBill(msg, userName, from, text) {
                     if (!items && genAI) {
                         console.log("Falling back to direct Gemini API for receipt scanning...");
                         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                        const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers.";
+                        const prompt = RECEIPT_VISION_PROMPT;
                         const imageParts = [{ inlineData: { data: buffer.toString('base64'), mimeType: mimetype } }];
                         const result = await model.generateContent([prompt, ...imageParts]);
                         const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
@@ -849,7 +875,7 @@ async function handleSplitBill(msg, userName, from, text) {
                     // If local parser fails, fall back to LLM
                     await reply(msg, "Parsing your items text... 🤖");
                     const openRouterKey = process.env.OPENROUTER_API_KEY;
-                    const prompt = "Extract all line items, services, products, or charges from the following text description. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If 'grand_total' is not explicitly mentioned or cannot be inferred, set it to null. If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Convert price shorthand notations like 'k', 'K', 'rb', 'ribu' to their full numeric values (e.g. 163k or 163K becomes 163000, 50k becomes 50000). Do not include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. If the text describes only a single expense, charge, or service without sub-items (e.g., 'Lapangan Badminton 163K'), treat that single charge as the line item. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers.\n\nInput text:\n" + text;
+                    const prompt = RECEIPT_TEXT_PROMPT_PREFIX + text;
 
                     if (openRouterKey) {
                         console.log("Using OpenRouter for text items parsing...");
@@ -2209,7 +2235,7 @@ async function startWhatsAppBot() {
                                         messages: [{
                                             role: "user",
                                             content: [
-                                                { type: "text", text: "Extract all line items, services, products, or charges from this receipt. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers." },
+                                                { type: "text", text: RECEIPT_VISION_PROMPT },
                                                 { type: "image_url", image_url: { url: `data:${mimetype};base64,${buffer.toString('base64')}` } }
                                             ]
                                         }]
@@ -2230,7 +2256,7 @@ async function startWhatsAppBot() {
                     if (!items && genAI) {
                         try {
                             const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                            const prompt = "Extract all line items, services, products, or charges from this receipt. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers.";
+                            const prompt = RECEIPT_VISION_PROMPT;
                             const imageParts = [{ inlineData: { data: buffer.toString('base64'), mimeType: mimetype } }];
                             const result = await model.generateContent([prompt, ...imageParts]);
                             const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
@@ -2241,7 +2267,7 @@ async function startWhatsAppBot() {
                     }
                 } else {
                     // We have OCR text! Convert OCR text to JSON using LLM
-                    const promptText = "Extract all line items, services, products, or charges from the following OCR-extracted receipt text. Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid for the receipt (after all taxes, service charges, discounts, rounding, etc. are applied). If 'grand_total' is not explicitly mentioned or cannot be inferred, set it to null. If any item has a quantity greater than 1 (e.g., '5 Butter Shio Pan'), you MUST split it into individual line items with unit price (e.g., 5 separate objects named 'Butter Shio Pan (1/5)', 'Butter Shio Pan (2/5)', etc., each with its raw unit price). Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next line). You MUST merge these multi-line names into a single item name (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price, instead of parsing them as separate items. Do NOT include metadata, tax, summary, or payment rows (like 'Subtotal', 'Grand Total', 'Total', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PJK Resto', 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali') in the 'items' array. Respond ONLY with the JSON object, no markdown formatting. Ensure numbers are integers.\n\nOCR Text:\n" + ocrText;
+                    const promptText = RECEIPT_OCR_PROMPT_PREFIX + ocrText;
 
                     const openRouterKey = process.env.OPENROUTER_API_KEY;
                     if (openRouterKey) {
