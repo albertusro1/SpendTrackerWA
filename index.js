@@ -298,6 +298,74 @@ function parseIdDate(str) {
     }
 }
 
+// Resolve custom date input (e.g. "yesterday", "kemarin", "15/7", "15 jul") into a proper d/m/yyyy string
+function resolveCustomDate(rawDate) {
+    if (!rawDate) return null;
+    const now = moment().utcOffset('+07:00');
+    const lower = rawDate.toLowerCase().trim();
+
+    // Handle relative dates
+    if (lower === 'yesterday' || lower === 'kemarin') {
+        const d = now.clone().subtract(1, 'day');
+        return d.format('D/M/YYYY');
+    }
+
+    // Handle "2 days ago" / "3 hari lalu"
+    const daysAgoMatch = lower.match(/^(\d+)\s+(?:days?\s*ago|hari\s*(?:lalu|yang\s*lalu))$/);
+    if (daysAgoMatch) {
+        const d = now.clone().subtract(parseInt(daysAgoMatch[1]), 'days');
+        return d.format('D/M/YYYY');
+    }
+
+    // Handle d/m or d-m (without year) → add current year
+    const shortDateMatch = rawDate.match(/^(\d{1,2})[\/\-](\d{1,2})$/);
+    if (shortDateMatch) {
+        const day = parseInt(shortDateMatch[1]);
+        const month = parseInt(shortDateMatch[2]);
+        return `${day}/${month}/${now.year()}`;
+    }
+
+    // Handle d/m/y or d-m-y (with year) → normalize to d/m/yyyy
+    const fullDateMatch = rawDate.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (fullDateMatch) {
+        const day = parseInt(fullDateMatch[1]);
+        const month = parseInt(fullDateMatch[2]);
+        let year = parseInt(fullDateMatch[3]);
+        if (year < 100) year += 2000;
+        return `${day}/${month}/${year}`;
+    }
+
+    // Handle "15 jul" or "15 juli 2026" or "15 july"
+    const MONTH_MAP = {
+        'jan': 1, 'january': 1, 'januari': 1,
+        'feb': 2, 'february': 2, 'februari': 2,
+        'mar': 3, 'march': 3, 'maret': 3,
+        'apr': 4, 'april': 4,
+        'may': 5, 'mei': 5,
+        'jun': 6, 'june': 6, 'juni': 6,
+        'jul': 7, 'july': 7, 'juli': 7,
+        'aug': 8, 'august': 8, 'agu': 8, 'agustus': 8,
+        'sep': 9, 'sept': 9, 'september': 9,
+        'oct': 10, 'october': 10, 'okt': 10, 'oktober': 10,
+        'nov': 11, 'november': 11,
+        'dec': 12, 'december': 12, 'des': 12, 'desember': 12
+    };
+    const namedMonthMatch = lower.match(/^(\d{1,2})\s+([a-z]+)\s*(\d{0,4})$/);
+    if (namedMonthMatch) {
+        const day = parseInt(namedMonthMatch[1]);
+        const monthName = namedMonthMatch[2];
+        let year = namedMonthMatch[3] ? parseInt(namedMonthMatch[3]) : now.year();
+        if (year < 100) year += 2000;
+        const month = MONTH_MAP[monthName];
+        if (month) {
+            return `${day}/${month}/${year}`;
+        }
+    }
+
+    // Fallback: return raw text (shouldn't happen with valid regex matches)
+    return rawDate;
+}
+
 function getStartOfWeek(date) {
     const d = new Date(date);
     const day = d.getDay();
@@ -2162,10 +2230,10 @@ async function startWhatsAppBot() {
                 let description = argsText.replace(match[0], '').trim() || 'No description';
 
                 let customDate = null;
-                const dateRegex = /\s+((?:yesterday|kemarin)|(?:\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)|(?:\d{1,2}\s+(?:jan|feb|mar|apr|may|mei|jun|jul|aug|agu|sep|oct|okt|nov|dec|des)[a-z]*\s*\d{0,4}))$/i;
+                const dateRegex = /\s+((?:yesterday|kemarin)|(?:\d+\s+(?:days?\s*ago|hari\s*(?:lalu|yang\s*lalu)))|(?:\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)|(?:\d{1,2}\s+(?:jan|feb|mar|apr|may|mei|jun|jul|aug|agu|sep|oct|okt|nov|dec|des)[a-z]*\s*\d{0,4}))$/i;
                 const dateMatch = description.match(dateRegex);
                 if (dateMatch) {
-                    customDate = dateMatch[1];
+                    customDate = resolveCustomDate(dateMatch[1]);
                     description = description.replace(dateRegex, '').trim() || 'No description';
                 }
 
