@@ -36,88 +36,98 @@ const CATEGORIES = {
         'boba', 'matcha', 'latte', 'espresso', 'americano', 'croissant',
         'sandwich', 'wrap', 'sushi', 'ramen', 'donut', 'waffle', 'pancake',
         'salt', 'chocolate', 'cookie', 'pastry', 'fries', 'padang',
+        'bubur', 'mie', 'mi goreng', 'mi ayam', 'indomie', 'mie ayam',
+        'nasi goreng', 'nasi uduk', 'nasi kuning', 'nasi padang', 'nasi campur',
+        'gado gado', 'gado-gado', 'ketoprak', 'siomay', 'batagor', 'pempek',
+        'kwetiau', 'capcay', 'tongseng', 'gulai', 'opor', 'sop', 'sup',
+        'lontong', 'kupat', 'ketupat', 'nasi liwet', 'nasi bakar',
+        'sei', 'lalapan', 'ikan bakar', 'ikan goreng', 'udang', 'cumi',
+        'geprek', 'rica rica', 'rica-rica', 'balado', 'kremes',
+        'somay', 'piscok', 'cilok', 'cireng', 'cimol', 'tahu bulat',
+        'seblak', 'baso', 'bakwan', 'risol', 'pastel', 'lumpia',
+        'sop buntut', 'rawon', 'konro', 'coto', 'pallubasa',
         'gacoan', 'solaria', 'richeese', 'baba rafi', 'jco', 'j.co', 'bakmi gm',
         'cfc', 'marugame', 'udon', 'yoshinoya', 'sushi tei', 'kopi kenangan',
         'janji jiwa', 'fore coffee', 'excelso', 'mixue', 'tealive', 'dum dum',
         'koi the', 'koi thé', 'shaburi', 'kintan', 'holy cow', 'holycow',
-        'burger king', 'bk', 'pizza hut', 'ph', 'dominos', 'domino\'s',
+        'burger king', 'pizza hut', 'dominos', "domino's",
         'aw restaurant', 'a&w', 'mako cake', 'breadtalk', 'tous les jours',
         'harvest cake', 'sour sally', 'kebab', 'warmindo', 'angkringan',
         'pecel lele', 'soto betawi', 'martabak pecennongan', 'kopi nako',
         'kopimana', 'ta wan', 'tawan', 'imperial kitchen', 'dimsum',
-        'd\'cost', 'dcost', 'hokben', 'hoka hoka bento', 'pepper lunch',
+        "d'cost", 'dcost', 'hokben', 'hoka hoka bento', 'pepper lunch',
         'sushi go', 'sushigo', 'genki sushi', 'gindaco', 'rejuve', 're.juve',
         'boost juice', 'kopi toko djawa', 'anomali'
     ],
     'Groceries': [
         'supermarket', 'indomaret', 'alfamart', 'hypermart', 'aeon',
         'sayur', 'buah', 'bumbu', 'sabun', 'shampo', 'tissue',
-        'grocery', 'market', 'store', 'mart', 'vegetable', 'fruit',
-        'alfamidi', 'midi', 'superindo', 'super indo', 'carrefour', 'transmart',
+        'grocery', 'market', 'store', 'vegetable', 'fruit',
+        'alfamidi', 'superindo', 'super indo', 'carrefour', 'transmart',
         'giant', 'hero supermarket', 'lotte mart', 'lottemart', 'lotte grosir',
         'farmers market', 'ranch market', 'the foodhall', 'foodhall',
-        'grand lucky', 'grandlucky', 'sayurbox', 'tanihub', 'kebut',
+        'grand lucky', 'grandlucky', 'sayurbox', 'tanihub',
         'papaya fresh', 'toko kelontong', 'pasar', 'sembako', 'beras',
         'minyak goreng', 'telur', 'gula', 'garam', 'deterjen', 'pewangi',
         'pasta gigi', 'odol', 'sikat gigi', 'shampoo'
     ],
     'Transportation': [
-        'bensin', 'grab', 'gojek', 'tol', 'parkir', 'pertamax',
-        'taxi', 'uber', 'gas', 'fuel', 'train', 'bus', 'mrt',
+        'bensin', 'grab ride', 'grab car', 'gojek', 'tol', 'parkir', 'pertamax',
+        'taxi', 'uber', 'fuel', 'train', 'bus', 'mrt',
         'ojek', 'transjakarta', 'commuter', 'travel', 'toll',
         'gocar', 'goride', 'grabcar', 'grabbike', 'maxim', 'indrive',
         'lrt', 'krl', 'commuterline', 'kereta', 'kai', 'damri',
         'pertalite', 'pertamax turbo', 'dexlite', 'pertamina dex',
         'pertamina', 'shell', 'shell super', 'v-power', 'bp fuel',
         'bp-akr', 'emoney', 'e-money', 'flazz', 'brizzi', 'tapcash',
-        'e-toll', 'etoll', 'linkaja', 'ovo', 'dana', 'gopay',
+        'e-toll', 'etoll',
         'astrapay', 'bluebird', 'blue bird', 'garuda', 'citilink',
         'lion air', 'batik air', 'sriwijaya', 'airasia', 'traveloka',
         'tiket.com', 'kai access', 'go-ride', 'go-car'
     ],
     'Utilities': [
-        'listrik', 'token', 'internet', 'pulsa', 'air', 'pdam',
-        'electric', 'water', 'phone', 'wifi', 'bill', 'subscription',
-        'pln', 'telkomsel', 'indosat', 'im3', 'xl', 'tri', '3',
+        'listrik', 'token listrik', 'internet', 'pulsa', 'air pdam', 'pdam',
+        'electric', 'water bill', 'phone bill', 'wifi', 'langganan internet',
+        'pln', 'telkomsel', 'indosat', 'im3', 'xl axiata', 'tri card', 'kartu tri',
         'smartfren', 'axis', 'byu', 'by.u', 'indihome', 'first media',
         'firstmedia', 'biznet', 'myrepublic', 'cbn', 'mnc play', 'telkom',
         'pascabayar', 'postpaid', 'prabayar', 'prepaid', 'gas alam', 'pgn'
     ],
     'Bills': [
-        'tagihan', 'bpjs', 'asuransi', 'pajak', 'tax', 'sewa', 'kost', 'kos',
-        'rent', 'kontrakan', 'subscription', 'langganan', 'credit card', 'cc',
+        'tagihan', 'bpjs', 'asuransi', 'pajak', 'sewa', 'kost', 'kos',
+        'rent', 'kontrakan', 'subscription', 'langganan', 'credit card',
         'pinjol', 'cicilan', 'leasing'
     ],
     'Sport & Hobbies': [
         'badminton', 'futsal', 'gym', 'court', 'sewa lapangan', 'racket', 'raket',
         'tenis', 'tennis', 'running', 'lari', 'gowes', 'sepeda', 'renang',
         'swimming', 'fitness', 'yoga', 'pilates', 'golf', 'climbing', 'hiking',
-        'ticket', 'tiket konser', 'event'
+        'tiket konser', 'event'
     ],
     'Shopping': [
-        'baju', 'celana', 'sepatu', 'tas', 'jam', 'aksesori',
+        'baju', 'celana', 'sepatu', 'tas', 'jam tangan', 'aksesori',
         'clothes', 'shoes', 'bag', 'watch', 'shirt', 'pants',
         'dress', 'fashion', 'shopee', 'tokopedia', 'lazada',
         'tokped', 'blibli', 'bukalapak', 'tiktok shop', 'tiktokshop',
         'uniqlo', 'zara', 'h&m', 'pull&bear', 'pull and bear', 'adidas',
-        'nike', 'puma', 'decathlon', 'map club', 'sogo', 'metro',
+        'nike', 'puma', 'decathlon', 'map club', 'sogo', 'metro dept',
         'seibu', 'central dept', 'galeries lafayette', 'sarinah',
         'matahari', 'ramayana', 'miniso', 'kkv', 'sociolla',
-        'ikea', 'informa', 'ace hardware', 'ace', 'hardware',
+        'ikea', 'informa', 'ace hardware',
         'guardian', 'watsons', 'watson', 'century', 'shopee mall'
     ],
     'Health': [
         'obat', 'dokter', 'rumah sakit', 'apotek', 'vitamin',
-        'medicine', 'doctor', 'hospital', 'pharmacy', 'clinic', 'gym',
-        'kimia farma', 'k24', 'k-24', 'roxy', 'viva health', 'halodoc',
+        'medicine', 'doctor', 'hospital', 'pharmacy', 'clinic',
+        'kimia farma', 'k24', 'k-24', 'viva health', 'halodoc',
         'alodokter', 'bpjs kesehatan', 'celebrity fitness', 'celfit',
-        'fitness first', 'golds gym', 'gold\'s gym', 'fithub', 'fit hub',
-        'megaclinic', 'prodia', 'lab', 'laboratorium', 'klinik', 'puskesmas',
+        'fitness first', 'golds gym', "gold's gym", 'fithub', 'fit hub',
+        'megaclinic', 'prodia', 'laboratorium', 'klinik', 'puskesmas',
         'suplemen', 'masker', 'hand sanitizer'
     ],
     'Entertainment': [
         'bioskop', 'film', 'game', 'netflix', 'spotify', 'youtube',
-        'movie', 'cinema', 'concert', 'ticket', 'karaoke',
+        'movie', 'cinema', 'concert', 'karaoke',
         'xxi', 'cgv', 'cinepolis', 'disney+', 'hotstar', 'hbo',
         'prime video', 'viu', 'iqiyi', 'wetv', 'vidio', 'steam',
         'playstation', 'nintendo', 'roblox', 'mobile legends', 'mlbb',
@@ -137,9 +147,22 @@ const CATEGORIES = {
     ],
     'Donation & Charity': [
         'zakat', 'sedekah', 'infak', 'sumbangan', 'perpuluhan', 'tithe',
-        'donasi', 'charity', 'tips', 'tip', 'parkir liar'
+        'donasi', 'charity', 'tips', 'parkir liar'
     ]
 };
+
+// Word-boundary-aware category matching to prevent false positives
+// (e.g., 'bubur' should NOT match 'bus', '30k' should NOT match '3')
+function matchesCategory(text, keyword) {
+    // For multi-word keywords, use simple substring matching (already specific enough)
+    if (keyword.includes(' ') || keyword.includes('-') || keyword.includes('.') || keyword.includes('+') || keyword.includes('&') || keyword.includes("'")) {
+        return text.includes(keyword);
+    }
+    // For single-word keywords, use word boundary matching
+    const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(?:^|[\\s,./\\-_()!?])${escaped}(?:$|[\\s,./\\-_()!?])`, 'i');
+    return regex.test(text);
+}
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const ADMIN_NUMBER = (process.env.ADMIN_NUMBER || '').trim();
@@ -173,8 +196,23 @@ async function initGoogleSheets() {
     }
 }
 
+async function ensureDocReady() {
+    if (!doc) {
+        await initGoogleSheets();
+    } else {
+        try {
+            // Test if doc metadata is still valid by accessing title
+            const _ = doc.title;
+        } catch (e) {
+            console.warn('Google Sheets doc metadata expired, re-initializing...', e.message);
+            await initGoogleSheets();
+        }
+    }
+}
+
 async function isUserAuthorized(phone) {
     if (phone === ADMIN_NUMBER) return 'Admin';
+    await ensureDocReady();
     if (!doc) return false;
     
     const sheet = doc.sheetsByTitle['AuthorizedUsers'];
@@ -188,6 +226,7 @@ async function isUserAuthorized(phone) {
 }
 
 async function logUserExpense(userName, amount, description, category, customDate) {
+    await ensureDocReady();
     let sheet = doc.sheetsByTitle[userName];
     if (!sheet) {
         sheet = await doc.addSheet({ title: userName, headerValues: ['Timestamp', 'Description', 'Amount', 'Category'] });
@@ -197,7 +236,7 @@ async function logUserExpense(userName, amount, description, category, customDat
 }
 
 async function checkBudgetLimits(userName, category, amount) {
-    if (!doc) await initGoogleSheets();
+    await ensureDocReady();
     const sheet = doc.sheetsByTitle[userName];
     if (!sheet) return '';
 
@@ -1162,7 +1201,7 @@ async function handleScanCommand(msg, userName, from, text) {
             let category = 'Miscellaneous';
             const searchText = item.name.toLowerCase();
             for (const [cat, keys] of Object.entries(CATEGORIES)) {
-                if (keys.some(k => searchText.includes(k))) {
+                if (keys.some(k => matchesCategory(searchText, k))) {
                     category = cat;
                     break;
                 }
@@ -1197,7 +1236,7 @@ async function handleScanCommand(msg, userName, from, text) {
         }))];
 
         let budgetWarnings = '';
-        if (!doc) await initGoogleSheets();
+        await ensureDocReady();
         const userSheet = doc.sheetsByTitle[userName];
         if (userSheet) {
             const rows = await userSheet.getRows();
@@ -1288,7 +1327,7 @@ const LEAK_KEYWORDS = [
 ];
 
 async function generateReportForUser(userName, timeframe) {
-    if (!doc) await initGoogleSheets();
+    await ensureDocReady();
     const sheet = doc.sheetsByTitle[userName];
     if (!sheet) {
         return `📊 *Summary — ${timeframe.toUpperCase()}*\n━━━━━━━━━━━━━━━━━\n\nNo expenses logged yet! Use \`/log [amount] [description]\` to start tracking.`;
@@ -1670,6 +1709,7 @@ async function getReportUsers() {
     if (ADMIN_NUMBER) {
         users.push({ phone: ADMIN_NUMBER, name: 'Admin' });
     }
+    await ensureDocReady();
     if (doc) {
         const sheet = doc.sheetsByTitle['AuthorizedUsers'];
         if (sheet) {
@@ -2055,6 +2095,7 @@ async function startWhatsAppBot() {
                 const phone = rawArgs[1];
                 const name = rawArgs.slice(2).join(' ');
                 
+                await ensureDocReady();
                 const sheet = doc.sheetsByTitle['AuthorizedUsers'];
                 await sheet.addRow({ Phone: phone, Name: name });
                 
@@ -2132,7 +2173,7 @@ async function startWhatsAppBot() {
                 let category = 'Miscellaneous';
                 const searchText = argsText.toLowerCase();
                 for (const [cat, keys] of Object.entries(CATEGORIES)) {
-                    if (keys.some(k => searchText.includes(k))) {
+                    if (keys.some(k => matchesCategory(searchText, k))) {
                         category = cat; break;
                     }
                 }
