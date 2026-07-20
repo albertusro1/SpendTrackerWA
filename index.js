@@ -1529,10 +1529,20 @@ async function generateReportForUser(userName, timeframe) {
         const txCount = filteredTransactions.length;
         
         const catData = {};
+        let weekendSpend = 0;
+        let weekdaySpend = 0;
+
         filteredTransactions.forEach(tx => {
             if (!catData[tx.cat]) catData[tx.cat] = { total: 0, items: [] };
             catData[tx.cat].total += tx.amt;
             catData[tx.cat].items.push({ desc: tx.desc, amt: tx.amt });
+
+            const dayOfWeek = tx.date.day(); // 0 is Sunday, 6 is Saturday
+            if (dayOfWeek === 0 || dayOfWeek === 6) {
+                weekendSpend += tx.amt;
+            } else {
+                weekdaySpend += tx.amt;
+            }
         });
 
         const leakCounts = {};
@@ -1566,6 +1576,20 @@ async function generateReportForUser(userName, timeframe) {
             }
         }
 
+        let topCatName = 'N/A';
+        let topCatAmt = 0;
+        for (const [cat, data] of Object.entries(catData)) {
+            if (data.total > topCatAmt) {
+                topCatAmt = data.total;
+                topCatName = cat;
+            }
+        }
+
+        const daysPassedInWeek = Math.max(1, now.diff(startOfWeek, 'days') + 1);
+        const runRate = totalFiltered / daysPassedInWeek;
+        const weekendPct = totalFiltered > 0 ? Math.round((weekendSpend / totalFiltered) * 100) : 0;
+        const weekdayPct = totalFiltered > 0 ? Math.round((weekdaySpend / totalFiltered) * 100) : 0;
+
         const periodStr = `${startOfWeek.format('D MMM')} - ${endOfWeek.format('D MMM YYYY')}`;
         let res = `📅 *Weekly Finance Summary (WTD)*\n`;
         res += `━━━━━━━━━━━━━━━━━━━━━━\n`;
@@ -1593,7 +1617,10 @@ async function generateReportForUser(userName, timeframe) {
         }
         
         res += `🔍 *Weekly Profiler Insights:*\n`;
+        res += `• 📉 *Run Rate:* Rp ${Math.round(runRate).toLocaleString('id-ID')}/day\n`;
+        res += `• 👑 *Top Category:* ${topCatName} (Rp ${topCatAmt.toLocaleString('id-ID')})\n`;
         res += `• 🏆 *Highest Spend Day:* ${maxDayName} ${maxDayAmt > 0 ? `(Rp ${maxDayAmt.toLocaleString('id-ID')})` : ''}\n`;
+        res += `• ⚖️ *Weekend vs Weekday:* ${weekendPct}% vs ${weekdayPct}%\n`;
         
         if (leaks.length > 0) {
             res += `• ⚠️ *Micro-Leak Alerts (Freq ≥ 3):*\n`;
@@ -1613,6 +1640,14 @@ async function generateReportForUser(userName, timeframe) {
         const pmtdTotal = pmtdTransactions.reduce((sum, tx) => sum + tx.amt, 0);
         const isFirstMonth = pmtdTotal === 0;
         
+        const NEEDS = ['Utilities', 'Groceries', 'Transportation', 'Health', 'Education', 'Bills'];
+        let needsTotal = 0;
+        let wantsTotal = 0;
+        let lateNightSpend = 0;
+        let microCount = 0;
+        let microSpend = 0;
+        const descFreq = {};
+
         const mtdCatTotals = {};
         const mtdCatData = {};
         mtdTransactions.forEach(tx => {
@@ -1620,7 +1655,41 @@ async function generateReportForUser(userName, timeframe) {
             if (!mtdCatData[tx.cat]) mtdCatData[tx.cat] = { total: 0, items: [] };
             mtdCatData[tx.cat].total += tx.amt;
             mtdCatData[tx.cat].items.push({ desc: tx.desc, amt: tx.amt });
+
+            if (NEEDS.includes(tx.cat)) needsTotal += tx.amt;
+            else wantsTotal += tx.amt;
+
+            const hour = tx.date.hour();
+            if (hour >= 21 || hour < 4) lateNightSpend += tx.amt;
+
+            if (tx.amt < 20000) {
+                microCount++;
+                microSpend += tx.amt;
+            }
+
+            const cleanDesc = tx.desc.toLowerCase().trim();
+            descFreq[cleanDesc] = (descFreq[cleanDesc] || { count: 0, amt: 0 });
+            descFreq[cleanDesc].count++;
+            descFreq[cleanDesc].amt += tx.amt;
         });
+
+        const atv = mtdTotal / (mtdTransactions.length || 1);
+        let maxAtvCat = 'N/A';
+        let maxAtvAmt = 0;
+        for (const [cat, data] of Object.entries(mtdCatData)) {
+            const catAtv = data.total / data.items.length;
+            if (catAtv > maxAtvAmt) {
+                maxAtvAmt = catAtv;
+                maxAtvCat = cat;
+            }
+        }
+
+        const topDesc = Object.entries(descFreq)
+            .sort((a, b) => b[1].count - a[1].count || b[1].amt - a[1].amt)
+            .slice(0, 3);
+
+        const needsPct = mtdTotal > 0 ? Math.round((needsTotal / mtdTotal) * 100) : 0;
+        const wantsPct = mtdTotal > 0 ? Math.round((wantsTotal / mtdTotal) * 100) : 0;
         
         const pmtdCatTotals = {};
         pmtdTransactions.forEach(tx => {
@@ -1701,6 +1770,22 @@ async function generateReportForUser(userName, timeframe) {
         
         res += `📊 *Monthly Alerts & Insights:*\n`;
         
+        res += `• ⚖️ *Needs vs Wants:* ${needsPct}% / ${wantsPct}%\n`;
+        if (wantsPct > 50) res += `  ⚠️ Your 'Wants' exceed 50% of your spending!\n`;
+        
+        if (lateNightSpend > 0) res += `• 🌙 *Late-Night Spends (9 PM-4 AM):* Rp ${lateNightSpend.toLocaleString('id-ID')}\n`;
+        
+        if (microCount > 0) res += `• 💧 *Micro-Transactions (<Rp 20k):* ${microCount} purchases, totaling Rp ${microSpend.toLocaleString('id-ID')}\n`;
+        
+        if (topDesc.length > 0) {
+            res += `• 🔄 *Top Frequent Purchases:*\n`;
+            topDesc.forEach((t, i) => {
+                res += `  ${i+1}. "${t[0]}" (${t[1].count}x) — Rp ${t[1].amt.toLocaleString('id-ID')}\n`;
+            });
+        }
+        
+        res += `• 💳 *Average Spend:* Rp ${Math.round(atv).toLocaleString('id-ID')}/tx. (Highest avg: ${maxAtvCat} at Rp ${Math.round(maxAtvAmt).toLocaleString('id-ID')}/tx)\n\n`;
+
         if (isFirstMonth) {
             res += `• 🌱 *Welcome:* This is your first month tracking. We will show Month-over-Month comparisons starting next month!\n`;
         } else {
