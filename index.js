@@ -399,12 +399,17 @@ async function reply(msg, textOrMedia, options = {}) {
 // ===== Shared Receipt Parsing Prompts =====
 const RECEIPT_ITEM_RULES = `Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid (after all taxes, service charges, discounts, rounding, etc. are applied). If 'grand_total' is not explicitly mentioned or cannot be inferred, set it to null.
 
-CRITICAL - Quantity handling: Many receipts show quantities in the format 'Qty x UnitPrice = LineTotal' (e.g., '3 x 46,000 = 138,000' or '2x24.000= 48.000'). You MUST read the quantity column carefully. If an item has quantity > 1, split it into that many individual line items, each with the UNIT price (NOT the line total). For example, '3 x 46,000 = 138,000' for 'Paket Ayam Kremes' must become 3 separate objects: 'Paket Ayam Kremes (1/3)' at 46000, 'Paket Ayam Kremes (2/3)' at 46000, 'Paket Ayam Kremes (3/3)' at 46000. Do NOT use the line total (138000) as the price. Always use the unit price.
+CRITICAL - Quantity and Price handling:
+1. Every receipt line has a total line price printed. The sum of all item prices in your 'items' array MUST match the sum of item line totals printed on the receipt.
+2. For items with quantity > 1 (e.g. '3 x 46,000 = 138,000' or '9 GORENGAN 27.000' or '4 SATE TAICHAN 120.000'):
+   - If unit price is explicitly given and Qty <= 3 (e.g., '3 x 46,000 = 138,000'), you MAY split into individual items: 'Paket Ayam Kremes (1/3)' at 46000, 'Paket Ayam Kremes (2/3)' at 46000, 'Paket Ayam Kremes (3/3)' at 46000. If you split, you MUST output EXACTLY Qty separate items so their sum equals the line total (138,000). NEVER drop any items!
+   - If Qty >= 4 or if the receipt displays 'Qty ItemName LineTotal' without explicit unit price (e.g., '9 GORENGAN 27.000' or '4 SATE TAICHAN 120.000'), do NOT split into individual items. Keep it as ONE line item representing the whole quantity and use the LINE TOTAL as the price (e.g., '9x GORENGAN' with price 27000, '4x SATE TAICHAN' with price 120000).
+3. Ensure all prices are positive integers.
 
 Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line and 'Cheese Shio Pan' on the next). You MUST merge these multi-line names into a single item (e.g., 'Garlic Cream Cheese Shio Pan') with its correct price.
 
 Do NOT include any of these in the 'items' array:
-- Metadata/header rows (e.g., 'Customer X Orang', 'Dine In', 'Table', 'Cashier', 'Waiter', 'Date')
+- Metadata/header rows (e.g., 'Customer X Orang', 'Dine In', 'Table', 'Kasir', 'Cashier', 'Waiter', 'Date', 'Jam Masuk', 'No. Meja', 'Mode')
 - Tax/fee rows (e.g., 'Subtotal', 'Sub Total', 'Grand Total', 'Total', 'Total Food', 'Total Beverage', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PB1', 'PJK Resto', 'Pajak')
 - Payment rows (e.g., 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali', 'Debit', 'Credit Card', 'QRIS')
 - Modifier/note lines (lines starting with '#' or '*', e.g., '#Dada', '*Paket Es Teh Tawar', '# 1 telor dadar tanpa cabe (MENU REQUEST)')
@@ -434,46 +439,27 @@ function isMetadataItem(name) {
         'pembulatan', 'rounding', 'pembulan', 'pembulat',
         'edc', 'bca', 'mandiri', 'bri', 'bni', 'cimb', 'visa', 'mastercard', 'qris',
         'non tunai', 'nontunai', 'tunai', 'cash', 'kembali', 'change', 'payment', 'credit card', 'debit',
-        'customer', 'dine in', 'dinein', 'dine-in', 'table', 'kasir', 'cashier', 'waiter', 'menu request'
+        'customer', 'dine in', 'dinein', 'dine-in', 'table', 'kasir', 'cashier', 'waiter', 'menu request', 'jam masuk', 'no. meja', 'mode'
     ];
     return blacklist.some(term => n.includes(term));
 }
 
 function processParsedItems(parsed) {
     let items = null;
-    let grandTotal = null;
     
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         items = parsed.items;
-        grandTotal = parsed.grand_total;
     } else if (Array.isArray(parsed)) {
         items = parsed;
     }
     
     if (items && Array.isArray(items)) {
         // Filter out metadata items AND any items with 0 or negative price
-        items = items.filter(item => !isMetadataItem(item.name) && item.price > 0);
-        
-        let gTotal = Number(grandTotal);
-        if (!isNaN(gTotal) && gTotal > 0) {
-            const itemsSum = items.reduce((sum, item) => sum + item.price, 0);
-            console.log(`[processParsedItems] Sum of items: ${itemsSum}, Grand Total: ${gTotal}`);
-            if (itemsSum > 0 && itemsSum !== gTotal) {
-                const ratio = gTotal / itemsSum;
-                console.log(`[processParsedItems] Scaling prices by ratio: ${ratio}`);
-                let runningSum = 0;
-                items.forEach((item, index) => {
-                    if (index === items.length - 1) {
-                        item.price = gTotal - runningSum;
-                    } else {
-                        item.price = Math.round(item.price * ratio);
-                        runningSum += item.price;
-                    }
-                });
-                const finalSum = items.reduce((sum, item) => sum + item.price, 0);
-                console.log(`[processParsedItems] Final sum of items after scaling: ${finalSum}`);
-            }
-        }
+        items = items.filter(item => item && item.name && !isMetadataItem(item.name) && Number(item.price) > 0);
+        items.forEach(item => {
+            item.price = Math.round(Number(item.price));
+            item.name = String(item.name).trim();
+        });
     }
     return items;
 }
