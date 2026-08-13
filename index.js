@@ -1062,13 +1062,8 @@ async function handleSplitBill(msg, userName, from, text) {
             session.receipts.push(newReceipt);
             session.currentReceiptIndex = session.receipts.length - 1;
             
-            if (isImage) {
-                session.state = 'AWAITING_PARTICIPANTS';
-                await reply(msg, `Found ${items.length} items for Bill ${session.receipts.length}! 🎉\n\nWho is sharing this bill? Send a comma-separated list of names (e.g., Alice, Bob, Charlie).`);
-            } else {
-                session.state = 'AWAITING_TAX';
-                await reply(msg, `Found ${items.length} items for Bill ${session.receipts.length}! 🎉\n\nIs there any tax or service charge for this bill?\n\nReply with:\n- 'no' / '0' if no tax\n- 'yes' / 'included' if tax is already included in the prices\n- A percentage or amount (e.g. '10%' or '15k') to distribute it proportionally.`);
-            }
+            session.state = 'AWAITING_TAX';
+            await reply(msg, `Found ${items.length} items for Bill ${session.receipts.length}! 🎉\n\nIs there any tax or service charge for this bill?\n\nReply with:\n- 'no' / '0' if no tax\n- 'yes' / 'included' if tax is already included in the prices\n- A percentage or amount (e.g. '10%' or '15k') to distribute it proportionally.`);
         } 
         else if (session.state === 'AWAITING_TAX') {
             const receipt = session.receipts[session.currentReceiptIndex];
@@ -1098,8 +1093,33 @@ async function handleSplitBill(msg, userName, from, text) {
                 await reply(msg, `✅ Total remains Rp ${total.toLocaleString('id-ID')}.`);
             }
             
-            session.state = 'AWAITING_PARTICIPANTS';
-            await reply(msg, `Who is sharing this bill? Send a comma-separated list of names (e.g., Alice, Bob, Charlie).`);
+            if (session.receipts.length > 1 && session.receipts[0].participants && session.receipts[0].participants.length > 0) {
+                receipt.participants = [...session.receipts[0].participants];
+                session.currentItemIndex = 0;
+                session.state = 'ASSIGNING_OWNERS';
+                
+                // Auto-assign metadata items (tax, service, rounding, etc.) to all participants
+                receipt.items.forEach(item => {
+                    if (isMetadataItem(item.name)) {
+                        item.owners = [...receipt.participants];
+                    }
+                });
+
+                // Find first item that needs assignment
+                while (session.currentItemIndex < receipt.items.length && receipt.items[session.currentItemIndex].owners.length > 0) {
+                    session.currentItemIndex++;
+                }
+
+                if (session.currentItemIndex >= receipt.items.length) {
+                    session.state = 'AWAITING_MORE_RECEIPTS';
+                    await reply(msg, `All items for Bill ${session.receipts.length} have been assigned! 🧾\n\nDo you want to add another receipt to this split session?\n- Upload another photo of a receipt.\n- Type/paste another items list (e.g. "Badminton 163k").\n- Or reply 'no' / 'done' to proceed to payment.`);
+                } else {
+                    await askForOwners(msg, session, from);
+                }
+            } else {
+                session.state = 'AWAITING_PARTICIPANTS';
+                await reply(msg, `Who is sharing this bill? Send a comma-separated list of names (e.g., Alice, Bob, Charlie).`);
+            }
         }
         else if (session.state === 'AWAITING_PARTICIPANTS') {
             const receipt = session.receipts[session.currentReceiptIndex];
