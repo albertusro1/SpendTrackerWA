@@ -397,7 +397,18 @@ async function reply(msg, textOrMedia, options = {}) {
 }
 
 // ===== Shared Receipt Parsing Prompts =====
-const RECEIPT_ITEM_RULES = `Return a JSON object with two fields: 'items' and 'grand_total'. 'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied. 'grand_total' must be a number representing the final total amount paid (after all taxes, service charges, discounts, rounding, etc. are applied). If 'grand_total' is not explicitly mentioned or cannot be inferred, set it to null.
+const RECEIPT_ITEM_RULES = `Return a JSON object with three fields: 'items', 'grand_total', and 'tax_charges'.
+
+'items' must be a JSON array where each object has 'name' (string) and 'price' (number) representing the raw item price before any tax, service charge, or rounding is applied.
+
+'grand_total' must be a number representing the final total amount paid (after all taxes, service charges, discounts, rounding, etc. are applied). If 'grand_total' is not explicitly mentioned or cannot be inferred, set it to null.
+
+'tax_charges' must be a JSON array of all tax, fee, service charge, and rounding lines found on the receipt. Each object has 'name' (string) and 'amount' (number). Include ALL of these if present (in any language or abbreviation):
+- Tax lines: Pajak, Pajak Restoran, Pajak Daerah, Tax, PPN, PB1, PPh, PJK, PKJ, PJK Resto, GST, VAT
+- Service charges: Service Charge, Service Fee, Biaya Layanan, Biaya Pelayanan, SC, Svc
+- Rounding: Pembulatan, Rounding, Pembulan
+- Other fees: TA Charge, Biaya Kemasan, Packaging, Biaya Tambahan, Surcharge
+If no tax/charge lines are found, set 'tax_charges' to an empty array [].
 
 CRITICAL - Quantity and Price handling:
 1. Every receipt line has a total line price printed. The sum of all item prices in your 'items' array MUST match the sum of item line totals printed on the receipt.
@@ -410,7 +421,7 @@ Some item names may wrap onto the next line (e.g., 'Garlic Cream' on one line an
 
 Do NOT include any of these in the 'items' array:
 - Metadata/header rows (e.g., 'Customer X Orang', 'Dine In', 'Table', 'Kasir', 'Cashier', 'Waiter', 'Date', 'Jam Masuk', 'No. Meja', 'Mode')
-- Tax/fee rows (e.g., 'Subtotal', 'Sub Total', 'Grand Total', 'Total', 'Total Food', 'Total Beverage', 'Tax', 'Service Charge', 'Rounding', 'TA Charge', 'Pembulatan', 'PPN', 'PB1', 'PJK Resto', 'Pajak')
+- Tax/fee rows (these go in 'tax_charges' instead)
 - Payment rows (e.g., 'EDC BCA', 'Non Tunai', 'Tunai', 'Cash', 'Change', 'Kembali', 'Debit', 'Credit Card', 'QRIS')
 - Modifier/note lines (lines starting with '#' or '*', e.g., '#Dada', '*Paket Es Teh Tawar', '# 1 telor dadar tanpa cabe (MENU REQUEST)')
 - Items with a price of 0 or no price
@@ -446,9 +457,18 @@ function isMetadataItem(name) {
 
 function processParsedItems(parsed) {
     let items = null;
+    let grandTotal = null;
+    let taxCharges = [];
     
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         items = parsed.items;
+        grandTotal = parsed.grand_total;
+        if (Array.isArray(parsed.tax_charges)) {
+            taxCharges = parsed.tax_charges.filter(tc => tc && tc.amount > 0).map(tc => ({
+                name: String(tc.name || 'Tax').trim(),
+                amount: Math.round(Number(tc.amount))
+            }));
+        }
     } else if (Array.isArray(parsed)) {
         items = parsed;
     }
@@ -461,7 +481,11 @@ function processParsedItems(parsed) {
             item.name = String(item.name).trim();
         });
     }
-    return items;
+    
+    let gTotal = Number(grandTotal);
+    if (isNaN(gTotal) || gTotal <= 0) gTotal = null;
+    
+    return { items, grandTotal: gTotal, taxCharges };
 }
 
 async function askForOwners(msg, session, from) {
@@ -471,6 +495,7 @@ async function askForOwners(msg, session, from) {
     receipt.participants.forEach((p, idx) => {
         prompt += `${idx + 1}. ${p}\n`;
     });
+    prompt += `\n_(Type 'back' to undo previous item, 'cancel' to exit)_`;
     await reply(msg, prompt);
 }
 
@@ -753,6 +778,104 @@ async function handleSplitBill(msg, userName, from, text) {
             return;
         }
 
+        if (text.toLowerCase() === 'back' || text.toLowerCase() === 'kembali') {
+            if (session.state === 'AWAITING_RECEIPT') {
+                await reply(msg, "❌ You are at the start of split bill. Type 'cancel' to exit.");
+                return;
+            }
+
+            if (session.state === 'AWAITING_TAX') {
+                session.receipts.pop();
+                if (!session.receipts || session.receipts.length === 0) {
+                    session.state = 'AWAITING_RECEIPT';
+                    await reply(msg, "↩️ Returned to receipt upload. Please send a photo or type items list (e.g. 'Badminton 163k'):");
+                    return;
+                } else {
+                    session.currentReceiptIndex = session.receipts.length - 1;
+                    session.state = 'AWAITING_MORE_RECEIPTS';
+                    await reply(msg, "↩️ Removed Bill and returned to previous step. Do you want to add another receipt, or reply 'done' to proceed to payment?\n_(Type 'back' to undo, 'cancel' to exit)_");
+                    return;
+                }
+            }
+
+            if (session.state === 'AWAITING_PARTICIPANTS') {
+                const receipt = session.receipts[session.currentReceiptIndex];
+                if (receipt.originalItems) {
+                    receipt.items = receipt.originalItems.map(i => ({ name: i.name, price: i.price, owners: [] }));
+                }
+                session.state = 'AWAITING_TAX';
+                const itemsSum = receipt.items.reduce((s, i) => s + i.price, 0);
+                await reply(msg, `↩️ Returned to Tax step for Bill ${session.currentReceiptIndex + 1}.\n\nIs there any tax or service charge for this bill (Subtotal: Rp ${itemsSum.toLocaleString('id-ID')})?\n\nReply with:\n- 'no' / '0' if no tax\n- 'yes' / 'included' if tax is already included\n- A percentage or amount (e.g. '10%' or '15k')\n_(Type 'back' to undo, 'cancel' to exit)_`);
+                return;
+            }
+
+            if (session.state === 'ASSIGNING_OWNERS') {
+                const receipt = session.receipts[session.currentReceiptIndex];
+                if (session.currentItemIndex === 0) {
+                    if (session.receipts.length === 1) {
+                        session.state = 'AWAITING_PARTICIPANTS';
+                        receipt.items.forEach(i => i.owners = []);
+                        await reply(msg, `↩️ Returned to Participants step.\n\nWho is sharing this bill? Send a comma-separated list of names (e.g., Alice, Bob, Charlie).\n_(Type 'back' to undo, 'cancel' to exit)_`);
+                        return;
+                    } else {
+                        if (receipt.originalItems) {
+                            receipt.items = receipt.originalItems.map(i => ({ name: i.name, price: i.price, owners: [] }));
+                        } else {
+                            receipt.items.forEach(i => i.owners = []);
+                        }
+                        session.state = 'AWAITING_TAX';
+                        const itemsSum = receipt.items.reduce((s, i) => s + i.price, 0);
+                        await reply(msg, `↩️ Returned to Tax step for Bill ${session.currentReceiptIndex + 1}.\n\nIs there any tax or service charge for this bill (Subtotal: Rp ${itemsSum.toLocaleString('id-ID')})?\n\nReply with:\n- 'no' / '0' if no tax\n- 'yes' / 'included' if tax is already included\n- A percentage or amount (e.g. '10%' or '15k')\n_(Type 'back' to undo, 'cancel' to exit)_`);
+                        return;
+                    }
+                } else {
+                    session.currentItemIndex--;
+                    while (session.currentItemIndex > 0 && isMetadataItem(receipt.items[session.currentItemIndex].name)) {
+                        session.currentItemIndex--;
+                    }
+                    receipt.items[session.currentItemIndex].owners = [];
+                    await reply(msg, "↩️ Undid previous item assignment.");
+                    await askForOwners(msg, session, from);
+                    return;
+                }
+            }
+
+            if (session.state === 'AWAITING_MORE_RECEIPTS') {
+                const receipt = session.receipts[session.currentReceiptIndex];
+                session.currentItemIndex = receipt.items.length - 1;
+                while (session.currentItemIndex > 0 && isMetadataItem(receipt.items[session.currentItemIndex].name)) {
+                    session.currentItemIndex--;
+                }
+                receipt.items[session.currentItemIndex].owners = [];
+                session.state = 'ASSIGNING_OWNERS';
+                await reply(msg, `↩️ Returned to assigning items for Bill ${session.currentReceiptIndex + 1}.`);
+                await askForOwners(msg, session, from);
+                return;
+            }
+
+            if (session.state === 'AWAITING_PAYERS') {
+                if (session.currentReceiptPayerIndex === 0) {
+                    session.state = 'AWAITING_MORE_RECEIPTS';
+                    await reply(msg, `↩️ Returned to Add Receipts step.\n\nDo you want to add another receipt to this split session?\n- Upload another photo of a receipt.\n- Type/paste another items list (e.g. "Badminton 163k").\n- Or reply 'no' / 'done' to proceed to payment.\n_(Type 'back' to undo, 'cancel' to exit)_`);
+                    return;
+                } else {
+                    session.currentReceiptPayerIndex--;
+                    const currentReceipt = session.receipts[session.currentReceiptPayerIndex];
+                    currentReceipt.payers = [];
+                    const currentTotal = currentReceipt.items.reduce((s, i) => s + i.price, 0);
+                    let prompt = `↩️ Returned to payer for *Bill ${session.currentReceiptPayerIndex + 1}* (Total: Rp ${currentTotal.toLocaleString('id-ID')}):\n\nReply with:\n`;
+                    currentReceipt.participants.forEach((p, idx) => {
+                        prompt += `  ${idx + 1}. ${p}\n`;
+                    });
+                    prompt += `- Any other name not in the list (e.g. David)\n`;
+                    prompt += `- Multiple payers with amounts (e.g. Alice 100k, Bob 50k)\n`;
+                    prompt += `- Or type 'me' to default to you (${userName}).\n_(Type 'back' to undo, 'cancel' to exit)_`;
+                    await reply(msg, prompt);
+                    return;
+                }
+            }
+        }
+
         // Check if we are adding a receipt (either initial or subsequent)
         if (session.state === 'AWAITING_RECEIPT' || session.state === 'AWAITING_MORE_RECEIPTS') {
             const isImage = msg.message?.imageMessage || msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage;
@@ -773,12 +896,14 @@ async function handleSplitBill(msg, userName, from, text) {
                 });
                 prompt += `- Any other name not in the list (e.g. David)\n`;
                 prompt += `- Multiple payers with amounts (e.g. Alice 100k, Bob 50k)\n`;
-                prompt += `- Or type 'me' to default to you (${userName}).`;
+                prompt += `- Or type 'me' to default to you (${userName}).\n_(Type 'back' to undo, 'cancel' to exit)_`;
                 await reply(msg, prompt);
                 return;
             }
 
             let items = null;
+            let detectedGrandTotal = null;
+            let detectedTaxCharges = [];
 
             if (isImage) {
                 // Image receipt input
@@ -841,7 +966,10 @@ async function handleSplitBill(msg, userName, from, text) {
                                     const data = await response.json();
                                     const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
                                     console.log(`[OCR LLM Response ${modelName}]:`, responseText);
-                                    items = processParsedItems(JSON.parse(responseText));
+                                    const parsed = processParsedItems(JSON.parse(responseText));
+                                    items = parsed.items;
+                                    detectedGrandTotal = parsed.grandTotal;
+                                    detectedTaxCharges = parsed.taxCharges;
                                     console.log(`[Processed Items ${modelName}]:`, JSON.stringify(items));
                                     if (items && items.length > 0) {
                                         break;
@@ -860,7 +988,10 @@ async function handleSplitBill(msg, userName, from, text) {
                             const result = await model.generateContent(promptText);
                             const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
                             console.log("[OCR Gemini Response]:", responseText);
-                            items = processParsedItems(JSON.parse(responseText));
+                            const parsed = processParsedItems(JSON.parse(responseText));
+                            items = parsed.items;
+                            detectedGrandTotal = parsed.grandTotal;
+                            detectedTaxCharges = parsed.taxCharges;
                             console.log("[Processed Items Gemini]:", JSON.stringify(items));
                         } catch (e) {
                             console.error("Gemini OCR parsing failed in handleSplitBill:", e.message);
@@ -924,7 +1055,10 @@ async function handleSplitBill(msg, userName, from, text) {
                                     if (data.choices && data.choices.length > 0) {
                                         const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
                                         console.log(`[Vision LLM Response ${modelName}]:`, responseText);
-                                        items = processParsedItems(JSON.parse(responseText));
+                                        const parsed = processParsedItems(JSON.parse(responseText));
+                                        items = parsed.items;
+                                        detectedGrandTotal = parsed.grandTotal;
+                                        detectedTaxCharges = parsed.taxCharges;
                                         console.log(`[Processed Items ${modelName}]:`, JSON.stringify(items));
                                         if (items && items.length > 0) {
                                             break;
@@ -949,7 +1083,10 @@ async function handleSplitBill(msg, userName, from, text) {
                         const result = await model.generateContent([prompt, ...imageParts]);
                         const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
                         console.log("[Vision Gemini Response]:", responseText);
-                        items = processParsedItems(JSON.parse(result.response.text().trim().replace(/```json/g, '').replace(/```/g, '')));
+                        const parsed = processParsedItems(JSON.parse(result.response.text().trim().replace(/```json/g, '').replace(/```/g, '')));
+                        items = parsed.items;
+                        detectedGrandTotal = parsed.grandTotal;
+                        detectedTaxCharges = parsed.taxCharges;
                         console.log("[Processed Items Gemini]:", JSON.stringify(items));
                     }
                 }
@@ -1011,7 +1148,10 @@ async function handleSplitBill(msg, userName, from, text) {
                                     const data = await response.json();
                                     if (data.choices && data.choices.length > 0) {
                                         const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                                        items = processParsedItems(JSON.parse(responseText));
+                                        const parsed = processParsedItems(JSON.parse(responseText));
+                                        items = parsed.items;
+                                        detectedGrandTotal = parsed.grandTotal;
+                                        detectedTaxCharges = parsed.taxCharges;
                                         if (items && items.length > 0) {
                                             break;
                                         }
@@ -1032,7 +1172,10 @@ async function handleSplitBill(msg, userName, from, text) {
                         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
                         const result = await model.generateContent(prompt);
                         const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                        items = processParsedItems(JSON.parse(responseText));
+                        const parsed = processParsedItems(JSON.parse(responseText));
+                        items = parsed.items;
+                        detectedGrandTotal = parsed.grandTotal;
+                        detectedTaxCharges = parsed.taxCharges;
                     }
 
                     if (!items) {
@@ -1041,8 +1184,13 @@ async function handleSplitBill(msg, userName, from, text) {
                 }
             }
 
-            if (items) {
-                items = processParsedItems(items);
+            if (items && !Array.isArray(items)) {
+                // items is already extracted from processParsedItems
+            } else if (items) {
+                const parsed = processParsedItems(items);
+                items = parsed.items;
+                detectedGrandTotal = parsed.grandTotal;
+                detectedTaxCharges = parsed.taxCharges;
             }
 
             if (!items || items.length === 0) throw new Error("No items parsed");
@@ -1056,14 +1204,96 @@ async function handleSplitBill(msg, userName, from, text) {
             const newReceipt = {
                 items: newItems,
                 participants: [],
-                payers: []
+                payers: [],
+                originalItems: items.map(item => ({ name: item.name, price: item.price }))
             };
             
             session.receipts.push(newReceipt);
             session.currentReceiptIndex = session.receipts.length - 1;
-            
-            session.state = 'AWAITING_TAX';
-            await reply(msg, `Found ${items.length} items for Bill ${session.receipts.length}! 🎉\n\nIs there any tax or service charge for this bill?\n\nReply with:\n- 'no' / '0' if no tax\n- 'yes' / 'included' if tax is already included in the prices\n- A percentage or amount (e.g. '10%' or '15k') to distribute it proportionally.`);
+
+            // === Auto-tax detection ===
+            const itemsSum = newItems.reduce((s, i) => s + i.price, 0);
+            let autoTaxAmt = 0;
+            let autoTaxSource = null;
+
+            // Layer 1: grand_total difference
+            if (detectedGrandTotal && detectedGrandTotal > itemsSum) {
+                autoTaxAmt = detectedGrandTotal - itemsSum;
+                autoTaxSource = 'grand_total';
+                console.log(`[Auto-Tax] Grand total ${detectedGrandTotal} - items sum ${itemsSum} = tax ${autoTaxAmt}`);
+            }
+            // Layer 2: tax_charges sum
+            else if (detectedTaxCharges && detectedTaxCharges.length > 0) {
+                autoTaxAmt = detectedTaxCharges.reduce((s, tc) => s + tc.amount, 0);
+                if (autoTaxAmt > 0) {
+                    autoTaxSource = 'tax_charges';
+                    const taxNames = detectedTaxCharges.map(tc => `${tc.name}: Rp ${tc.amount.toLocaleString('id-ID')}`).join(', ');
+                    console.log(`[Auto-Tax] Detected tax lines: ${taxNames}, total tax: ${autoTaxAmt}`);
+                }
+            }
+
+            if (autoTaxAmt > 0) {
+                // Auto-apply tax proportionally
+                let runningSum = 0;
+                newReceipt.items.forEach((item, index) => {
+                    if (index === newReceipt.items.length - 1) {
+                        item.price = item.price + (autoTaxAmt - runningSum + itemsSum - (itemsSum));
+                        // Simpler: distribute proportionally
+                    }
+                    const share = Math.round((item.price / itemsSum) * autoTaxAmt);
+                    item.price = newReceipt.originalItems[index].price + share;
+                    runningSum += share;
+                });
+                // Fix rounding on last item
+                const newTotal = newReceipt.items.reduce((s, i) => s + i.price, 0);
+                const expectedTotal = itemsSum + autoTaxAmt;
+                if (newTotal !== expectedTotal) {
+                    newReceipt.items[newReceipt.items.length - 1].price += (expectedTotal - newTotal);
+                }
+                const finalTotal = newReceipt.items.reduce((s, i) => s + i.price, 0);
+                
+                let taxLabel = '';
+                if (autoTaxSource === 'tax_charges' && detectedTaxCharges.length > 0) {
+                    taxLabel = detectedTaxCharges.map(tc => `${tc.name}: Rp ${tc.amount.toLocaleString('id-ID')}`).join(', ');
+                }
+
+                let replyText = `Found ${items.length} items for Bill ${session.receipts.length}! 🎉\n\n`;
+                replyText += `✅ *Auto-detected tax/charges:* Rp ${autoTaxAmt.toLocaleString('id-ID')}`;
+                if (taxLabel) replyText += ` (${taxLabel})`;
+                replyText += `\n📋 Subtotal: Rp ${itemsSum.toLocaleString('id-ID')} → Total: Rp ${finalTotal.toLocaleString('id-ID')}`;
+                await reply(msg, replyText);
+
+                // Skip AWAITING_TAX, go directly to participants or owners
+                if (session.receipts.length > 1 && session.receipts[0].participants && session.receipts[0].participants.length > 0) {
+                    newReceipt.participants = [...session.receipts[0].participants];
+                    session.currentItemIndex = 0;
+                    session.state = 'ASSIGNING_OWNERS';
+                    
+                    newReceipt.items.forEach(item => {
+                        if (isMetadataItem(item.name)) {
+                            item.owners = [...newReceipt.participants];
+                        }
+                    });
+
+                    while (session.currentItemIndex < newReceipt.items.length && newReceipt.items[session.currentItemIndex].owners.length > 0) {
+                        session.currentItemIndex++;
+                    }
+
+                    if (session.currentItemIndex >= newReceipt.items.length) {
+                        session.state = 'AWAITING_MORE_RECEIPTS';
+                        await reply(msg, `All items for Bill ${session.receipts.length} have been assigned! 🧾\n\nDo you want to add another receipt?\n- Upload another photo or type/paste items.\n- Or reply 'no' / 'done' to proceed to payment.\n_(Type 'back' to undo, 'cancel' to exit)_`);
+                    } else {
+                        await askForOwners(msg, session, from);
+                    }
+                } else {
+                    session.state = 'AWAITING_PARTICIPANTS';
+                    await reply(msg, `Who is sharing this bill? Send a comma-separated list of names (e.g., Alice, Bob, Charlie).\n_(Type 'back' to undo, 'cancel' to exit)_`);
+                }
+            } else {
+                // No tax detected — ask manually
+                session.state = 'AWAITING_TAX';
+                await reply(msg, `Found ${items.length} items for Bill ${session.receipts.length}! 🎉\n\nIs there any tax or service charge for this bill?\n\nReply with:\n- 'no' / '0' if no tax\n- 'yes' / 'included' if tax is already included in the prices\n- A percentage or amount (e.g. '10%' or '15k') to distribute it proportionally.\n_(Type 'back' to undo, 'cancel' to exit)_`);
+            }
         } 
         else if (session.state === 'AWAITING_TAX') {
             const receipt = session.receipts[session.currentReceiptIndex];
@@ -1118,7 +1348,7 @@ async function handleSplitBill(msg, userName, from, text) {
                 }
             } else {
                 session.state = 'AWAITING_PARTICIPANTS';
-                await reply(msg, `Who is sharing this bill? Send a comma-separated list of names (e.g., Alice, Bob, Charlie).`);
+                await reply(msg, `Who is sharing this bill? Send a comma-separated list of names (e.g., Alice, Bob, Charlie).\n_(Type 'back' to undo, 'cancel' to exit)_`);
             }
         }
         else if (session.state === 'AWAITING_PARTICIPANTS') {
@@ -1196,7 +1426,7 @@ async function handleSplitBill(msg, userName, from, text) {
                 });
                 prompt += `- Any other name not in the list (e.g. David)\n`;
                 prompt += `- Multiple payers with amounts (e.g. Alice 100k, Bob 50k)\n`;
-                prompt += `- Or type 'me' to default to you (${userName}).`;
+                prompt += `- Or type 'me' to default to you (${userName}).\n_(Type 'back' to undo, 'cancel' to exit)_`;
                 await reply(msg, prompt);
             } else {
                 await reply(msg, "Please upload another photo, type/paste your items list, or reply 'no'/'done' to proceed to payment.");
@@ -1228,7 +1458,7 @@ async function handleSplitBill(msg, userName, from, text) {
                 });
                 prompt += `- Any other name not in the list (e.g. David)\n`;
                 prompt += `- Multiple payers with amounts (e.g. Alice 100k, Bob 50k)\n`;
-                prompt += `- Or type 'me' to default to you (${userName}).`;
+                prompt += `- Or type 'me' to default to you (${userName}).\n_(Type 'back' to undo, 'cancel' to exit)_`;
                 await reply(msg, prompt);
             } else {
                 await calculateSplitBill(msg, session, userName, from);
@@ -2444,7 +2674,7 @@ async function startWhatsAppBot() {
                                 if (response.ok) {
                                     const data = await response.json();
                                     const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                                    items = processParsedItems(JSON.parse(responseText));
+                                    items = processParsedItems(JSON.parse(responseText)).items;
                                     break;
                                 }
                             } catch (e) {
@@ -2460,7 +2690,7 @@ async function startWhatsAppBot() {
                             const imageParts = [{ inlineData: { data: buffer.toString('base64'), mimeType: mimetype } }];
                             const result = await model.generateContent([prompt, ...imageParts]);
                             const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                            items = processParsedItems(JSON.parse(responseText));
+                            items = processParsedItems(JSON.parse(responseText)).items;
                         } catch (e) {
                             console.error("Fallback Gemini direct vision failed:", e.message);
                         }
@@ -2494,7 +2724,7 @@ async function startWhatsAppBot() {
                                 if (response.ok) {
                                     const data = await response.json();
                                     const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                                    items = processParsedItems(JSON.parse(responseText));
+                                    items = processParsedItems(JSON.parse(responseText)).items;
                                     break;
                                 }
                             } catch (e) {
@@ -2508,7 +2738,7 @@ async function startWhatsAppBot() {
                             const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
                             const result = await model.generateContent(promptText);
                             const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                            items = processParsedItems(JSON.parse(responseText));
+                            items = processParsedItems(JSON.parse(responseText)).items;
                         } catch (e) {
                             console.error("Gemini OCR parsing failed:", e.message);
                         }
@@ -2516,7 +2746,7 @@ async function startWhatsAppBot() {
                 }
 
                 if (items) {
-                    items = processParsedItems(items);
+                    items = processParsedItems(items).items;
                 }
 
                 if (!items || items.length === 0) {
