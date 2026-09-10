@@ -508,8 +508,8 @@ async function parseReceiptFromImage(buffer, mimetype) {
     if (genAI) {
         const geminiModels = Array.from(new Set([
             process.env.GEMINI_MODEL,
-            "gemini-3.8-flash",
             "gemini-3.6-flash",
+            "gemini-3.8-flash",
             "gemini-3.5-flash"
         ].filter(Boolean)));
 
@@ -558,8 +558,8 @@ async function parseReceiptFromImage(buffer, mimetype) {
         if (genAI && !geminiAuthError) {
             const geminiModels = Array.from(new Set([
                 process.env.GEMINI_MODEL,
-                "gemini-3.8-flash",
                 "gemini-3.6-flash",
+                "gemini-3.8-flash",
                 "gemini-3.5-flash"
             ].filter(Boolean)));
             for (const modelName of geminiModels) {
@@ -1206,8 +1206,8 @@ async function handleSplitBill(msg, userName, from, text) {
                         console.log("Falling back to direct Gemini API for text items parsing...");
                         const geminiModels = Array.from(new Set([
                             process.env.GEMINI_MODEL,
-                            "gemini-3.8-flash",
                             "gemini-3.6-flash",
+                            "gemini-3.8-flash",
                             "gemini-3.5-flash"
                         ].filter(Boolean)));
                         for (const modelName of geminiModels) {
