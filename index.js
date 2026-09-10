@@ -1238,12 +1238,10 @@ async function handleSplitBill(msg, userName, from, text) {
             }
 
             if (items && !Array.isArray(items)) {
-                // items is already extracted from processParsedItems
-            } else if (items) {
                 const parsed = processParsedItems(items);
                 items = parsed.items;
-                detectedGrandTotal = parsed.grandTotal;
-                detectedTaxCharges = parsed.taxCharges;
+                if (!detectedGrandTotal) detectedGrandTotal = parsed.grandTotal;
+                if (!detectedTaxCharges || detectedTaxCharges.length === 0) detectedTaxCharges = parsed.taxCharges;
             }
 
             if (!items || items.length === 0) throw new Error("No items parsed");
@@ -1289,24 +1287,20 @@ async function handleSplitBill(msg, userName, from, text) {
                 // Auto-apply tax proportionally
                 let runningSum = 0;
                 newReceipt.items.forEach((item, index) => {
-                    if (index === newReceipt.items.length - 1) {
-                        item.price = item.price + (autoTaxAmt - runningSum + itemsSum - (itemsSum));
-                        // Simpler: distribute proportionally
-                    }
-                    const share = Math.round((item.price / itemsSum) * autoTaxAmt);
+                    const share = Math.round((newReceipt.originalItems[index].price / itemsSum) * autoTaxAmt);
                     item.price = newReceipt.originalItems[index].price + share;
                     runningSum += share;
                 });
                 // Fix rounding on last item
                 const newTotal = newReceipt.items.reduce((s, i) => s + i.price, 0);
                 const expectedTotal = itemsSum + autoTaxAmt;
-                if (newTotal !== expectedTotal) {
+                if (newTotal !== expectedTotal && newReceipt.items.length > 0) {
                     newReceipt.items[newReceipt.items.length - 1].price += (expectedTotal - newTotal);
                 }
                 const finalTotal = newReceipt.items.reduce((s, i) => s + i.price, 0);
                 
                 let taxLabel = '';
-                if (autoTaxSource === 'tax_charges' && detectedTaxCharges.length > 0) {
+                if (detectedTaxCharges && detectedTaxCharges.length > 0) {
                     taxLabel = detectedTaxCharges.map(tc => `${tc.name}: Rp ${tc.amount.toLocaleString('id-ID')}`).join(', ');
                 }
 
