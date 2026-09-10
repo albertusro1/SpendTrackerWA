@@ -679,7 +679,7 @@ async function parseReceiptFromImage(buffer, mimetype) {
     }
 
     if (geminiAuthError) {
-        throw new Error(`GEMINI_QUOTA_ERROR: ${geminiAuthError}`);
+        console.warn(`[Fast Vision] Quota/auth issue detected for Gemini: ${geminiAuthError}`);
     }
 
     return { items: null, grandTotal: null, taxCharges: [] };
@@ -1224,6 +1224,9 @@ async function handleSplitBill(msg, userName, from, text) {
                                 }
                             } catch (e) {
                                 console.warn(`Gemini text items parsing failed with ${modelName}:`, e.message);
+                                if (isAccountOrQuotaError(e)) {
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1516,11 +1519,7 @@ async function handleSplitBill(msg, userName, from, text) {
         }
     } catch (e) {
         console.error("Gemini/SplitBill Error:", e);
-        if (e.message && (e.message.includes("GEMINI_QUOTA_ERROR") || e.message.includes("depleted") || e.message.includes("Too Many Requests") || e.message.includes("429"))) {
-            await reply(msg, "⚠️ *Gemini API Quota/Credits Depleted!*\n\nYour Gemini API credits or quota are exhausted (429). Please update `GEMINI_API_KEY` in `.env` with a free key from https://aistudio.google.com/app/apikey.");
-        } else {
-            await reply(msg, "Sorry, I couldn't process the request: " + (e.message || "Unknown error") + "\nPlease type 'cancel' to exit, or try again.");
-        }
+        await reply(msg, "Sorry, I couldn't process the request. Please type 'cancel' to exit, or try again.");
     }
 }
 
@@ -2687,12 +2686,6 @@ async function startWhatsAppBot() {
                     parsedResult = await parseReceiptFromImage(buffer, mimetype);
                 } catch (err) {
                     console.error("Scan parsing error:", err);
-                    if (err.message && (err.message.includes("GEMINI_QUOTA_ERROR") || err.message.includes("depleted") || err.message.includes("Too Many Requests") || err.message.includes("429"))) {
-                        await reply(msg, "⚠️ *Gemini API Quota/Credits Depleted!*\n\nYour Gemini API credits or quota are exhausted (429). Please update `GEMINI_API_KEY` in `.env` with a free key from https://aistudio.google.com/app/apikey.");
-                        return;
-                    }
-                    await reply(msg, "❌ Failed to parse receipt: " + err.message);
-                    return;
                 }
                 const items = parsedResult?.items;
 
