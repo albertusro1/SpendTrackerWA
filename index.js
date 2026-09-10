@@ -488,6 +488,169 @@ function processParsedItems(parsed) {
     return { items, grandTotal: gTotal, taxCharges };
 }
 
+async function parseReceiptFromImage(buffer, mimetype) {
+    // 1. PRIMARY FAST PATH: Direct Gemini Vision API (~1-2 seconds)
+    if (genAI) {
+        const geminiModels = Array.from(new Set([
+            process.env.GEMINI_MODEL,
+            "gemini-3.8-flash",
+            "gemini-3.5-flash",
+            "gemini-2.5-flash"
+        ].filter(Boolean)));
+
+        for (const modelName of geminiModels) {
+            try {
+                console.log(`[Fast Vision] Trying direct Gemini Vision model: ${modelName}`);
+                const model = genAI.getGenerativeModel({ model: modelName });
+                const imageParts = [{ inlineData: { data: buffer.toString('base64'), mimeType: mimetype } }];
+                const result = await model.generateContent([RECEIPT_VISION_PROMPT, ...imageParts]);
+                const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
+                console.log(`[Vision Gemini Response ${modelName}]:`, responseText);
+                const parsed = processParsedItems(JSON.parse(responseText));
+                if (parsed && parsed.items && parsed.items.length > 0) {
+                    console.log(`[Fast Vision] Successfully parsed receipt with Gemini ${modelName}! (${parsed.items.length} items)`);
+                    return parsed;
+                }
+            } catch (e) {
+                console.warn(`[Fast Vision] Direct Gemini Vision failed with ${modelName}:`, e.message);
+            }
+        }
+    } else {
+        console.warn("[Fast Vision] GEMINI_API_KEY is not set in environment. Falling back to Google Cloud Vision OCR & OpenRouter.");
+    }
+
+    // 2. SECONDARY FALLBACK: Google Cloud Vision OCR + LLM
+    const openRouterKey = process.env.OPENROUTER_API_KEY;
+    let ocrText = '';
+    try {
+        const [visionResult] = await visionClient.textDetection({ image: { content: buffer } });
+        ocrText = visionResult.fullTextAnnotation?.text || visionResult.textAnnotations?.[0]?.description || '';
+        console.log("[OCR Text Extracted]:", ocrText);
+    } catch (ocrErr) {
+        console.error("Google Cloud Vision OCR failed:", ocrErr.message);
+    }
+
+    if (ocrText) {
+        console.log("OCR text extracted successfully. Parsing text via LLM...");
+        const promptText = RECEIPT_OCR_PROMPT_PREFIX + ocrText;
+
+        // Try Gemini on OCR text first if genAI is available
+        if (genAI) {
+            const geminiModels = Array.from(new Set([
+                process.env.GEMINI_MODEL,
+                "gemini-3.8-flash",
+                "gemini-3.5-flash",
+                "gemini-2.5-flash"
+            ].filter(Boolean)));
+            for (const modelName of geminiModels) {
+                try {
+                    const model = genAI.getGenerativeModel({ model: modelName });
+                    const result = await model.generateContent(promptText);
+                    const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
+                    console.log(`[OCR Gemini Response ${modelName}]:`, responseText);
+                    const parsed = processParsedItems(JSON.parse(responseText));
+                    if (parsed && parsed.items && parsed.items.length > 0) {
+                        return parsed;
+                    }
+                } catch (err) {
+                    console.warn(`Gemini OCR text parsing failed with ${modelName}:`, err.message);
+                }
+            }
+        }
+
+        // Try OpenRouter on OCR text
+        if (openRouterKey) {
+            const modelsToTry = [
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "google/gemma-4-31b-it:free",
+                "openrouter/free"
+            ];
+            for (const modelName of modelsToTry) {
+                try {
+                    console.log(`Trying OpenRouter model for OCR text parsing: ${modelName}`);
+                    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                        method: "POST",
+                        headers: {
+                            "Authorization": `Bearer ${openRouterKey}`,
+                            "Content-Type": "application/json",
+                            "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
+                        },
+                        body: JSON.stringify({
+                            model: modelName,
+                            messages: [{ role: "user", content: promptText }]
+                        })
+                    });
+                    if (response.ok) {
+                        const data = await response.json();
+                        const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
+                        console.log(`[OCR LLM Response ${modelName}]:`, responseText);
+                        const parsed = processParsedItems(JSON.parse(responseText));
+                        if (parsed && parsed.items && parsed.items.length > 0) {
+                            return parsed;
+                        }
+                    }
+                } catch (e) {
+                    console.warn(`OpenRouter OCR parsing failed with ${modelName}:`, e.message);
+                }
+            }
+        }
+    }
+
+    // 3. TERTIARY FALLBACK: OpenRouter Vision
+    if (openRouterKey) {
+        const modelsToTry = [
+            "meta-llama/llama-3.2-11b-vision-instruct:free",
+            "qwen/qwen-2-vl-7b-instruct:free",
+            "openrouter/free"
+        ];
+        for (const modelName of modelsToTry) {
+            let timeoutId;
+            try {
+                console.log(`Trying OpenRouter Vision model: ${modelName}`);
+                const controller = new AbortController();
+                timeoutId = setTimeout(() => controller.abort(), 15000);
+
+                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${openRouterKey}`,
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
+                    },
+                    signal: controller.signal,
+                    body: JSON.stringify({
+                        model: modelName,
+                        messages: [{
+                            role: "user",
+                            content: [
+                                { type: "text", text: RECEIPT_VISION_PROMPT },
+                                { type: "image_url", image_url: { url: `data:${mimetype};base64,${buffer.toString('base64')}` } }
+                            ]
+                        }]
+                    })
+                });
+                clearTimeout(timeoutId);
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.choices && data.choices.length > 0) {
+                        const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
+                        const parsed = processParsedItems(JSON.parse(responseText));
+                        if (parsed && parsed.items && parsed.items.length > 0) {
+                            return parsed;
+                        }
+                    }
+                }
+            } catch (err) {
+                if (timeoutId) clearTimeout(timeoutId);
+                console.warn(`Failed with OpenRouter vision model ${modelName}:`, err.message);
+            }
+        }
+    }
+
+    return { items: null, grandTotal: null, taxCharges: [] };
+}
+
 async function askForOwners(msg, session, from) {
     const receipt = session.receipts[session.currentReceiptIndex];
     const item = receipt.items[session.currentItemIndex];
@@ -924,175 +1087,13 @@ async function handleSplitBill(msg, userName, from, text) {
                 
                 await reply(msg, "Reading receipt with AI... 🤖 Please wait a moment.");
                 
-                const openRouterKey = process.env.OPENROUTER_API_KEY;
-                
-                // 1. OCR using Google Cloud Vision
-                let ocrText = '';
-                try {
-                    const [visionResult] = await visionClient.textDetection({ image: { content: buffer } });
-                    ocrText = visionResult.fullTextAnnotation?.text || visionResult.textAnnotations?.[0]?.description || '';
-                    console.log("[OCR Text Extracted]:", ocrText);
-                } catch (ocrErr) {
-                    console.error("Google Cloud Vision OCR failed in handleSplitBill:", ocrErr);
-                }
+                const parsedResult = await parseReceiptFromImage(buffer, mimetype);
+                items = parsedResult.items;
+                detectedGrandTotal = parsedResult.grandTotal;
+                detectedTaxCharges = parsedResult.taxCharges;
 
-                if (ocrText) {
-                    console.log("OCR text extracted successfully in handleSplitBill. Parsing text via LLM...");
-                    const promptText = RECEIPT_OCR_PROMPT_PREFIX + ocrText;
-
-                    if (openRouterKey) {
-                        const modelsToTry = [
-                            "meta-llama/llama-3.3-70b-instruct:free",
-                            "google/gemma-2-9b-it:free",
-                            "google/gemma-4-31b-it:free",
-                            "openrouter/free"
-                        ];
-                        for (const modelName of modelsToTry) {
-                            try {
-                                console.log(`Trying OpenRouter model for OCR text parsing: ${modelName}`);
-                                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                                    method: "POST",
-                                    headers: {
-                                        "Authorization": `Bearer ${openRouterKey}`,
-                                        "Content-Type": "application/json",
-                                        "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
-                                    },
-                                    body: JSON.stringify({
-                                        model: modelName,
-                                        messages: [{ role: "user", content: promptText }]
-                                    })
-                                });
-                                if (response.ok) {
-                                    const data = await response.json();
-                                    const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                                    console.log(`[OCR LLM Response ${modelName}]:`, responseText);
-                                    const parsed = processParsedItems(JSON.parse(responseText));
-                                    items = parsed.items;
-                                    detectedGrandTotal = parsed.grandTotal;
-                                    detectedTaxCharges = parsed.taxCharges;
-                                    console.log(`[Processed Items ${modelName}]:`, JSON.stringify(items));
-                                    if (items && items.length > 0) {
-                                        break;
-                                    }
-                                }
-                            } catch (e) {
-                                console.warn(`OpenRouter OCR parsing failed with ${modelName}:`, e.message);
-                            }
-                        }
-                    }
-
-                    if (!items && genAI) {
-                        try {
-                            console.log("Falling back to direct Gemini OCR text parsing...");
-                            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                            const result = await model.generateContent(promptText);
-                            const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                            console.log("[OCR Gemini Response]:", responseText);
-                            const parsed = processParsedItems(JSON.parse(responseText));
-                            items = parsed.items;
-                            detectedGrandTotal = parsed.grandTotal;
-                            detectedTaxCharges = parsed.taxCharges;
-                            console.log("[Processed Items Gemini]:", JSON.stringify(items));
-                        } catch (e) {
-                            console.error("Gemini OCR parsing failed in handleSplitBill:", e.message);
-                        }
-                    }
-                }
-
-                // If OCR failed or didn't yield items, fall back to direct Vision LLM
-                if (!items) {
-                    console.log("No OCR text or OCR parsing yielded no items. Parsing image directly via Vision LLM...");
-                    if (openRouterKey) {
-                        const modelsToTry = [
-                            "meta-llama/llama-3.2-11b-vision-instruct:free",
-                            "qwen/qwen-2-vl-7b-instruct:free",
-                            "nvidia/nemotron-nano-12b-v2-vl:free",
-                            "google/gemma-4-31b-it:free",
-                            "openrouter/free"
-                        ];
-
-                        for (const modelName of modelsToTry) {
-                            let timeoutId;
-                            try {
-                                console.log(`Trying OpenRouter Vision model: ${modelName}`);
-                                const controller = new AbortController();
-                                timeoutId = setTimeout(() => controller.abort(), 20000);
-
-                                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                                    method: "POST",
-                                    headers: {
-                                        "Authorization": `Bearer ${openRouterKey}`,
-                                        "Content-Type": "application/json",
-                                        "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
-                                    },
-                                    signal: controller.signal,
-                                    body: JSON.stringify({
-                                        model: modelName,
-                                        messages: [
-                                            {
-                                                role: "user",
-                                                content: [
-                                                    {
-                                                        type: "text",
-                                                        text: RECEIPT_VISION_PROMPT
-                                                    },
-                                                    {
-                                                        type: "image_url",
-                                                        image_url: {
-                                                            url: `data:${mimetype};base64,${buffer.toString('base64')}`
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    })
-                                });
-
-                                clearTimeout(timeoutId);
-
-                                if (response.ok) {
-                                    const data = await response.json();
-                                    if (data.choices && data.choices.length > 0) {
-                                        const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                                        console.log(`[Vision LLM Response ${modelName}]:`, responseText);
-                                        const parsed = processParsedItems(JSON.parse(responseText));
-                                        items = parsed.items;
-                                        detectedGrandTotal = parsed.grandTotal;
-                                        detectedTaxCharges = parsed.taxCharges;
-                                        console.log(`[Processed Items ${modelName}]:`, JSON.stringify(items));
-                                        if (items && items.length > 0) {
-                                            break;
-                                        }
-                                    }
-                                } else {
-                                    const errText = await response.text();
-                                    console.warn(`OpenRouter Vision model ${modelName} returned error status ${response.status}: ${errText}`);
-                                }
-                            } catch (err) {
-                                if (timeoutId) clearTimeout(timeoutId);
-                                console.warn(`Failed with model ${modelName}:`, err.message);
-                            }
-                        }
-                    }
-
-                    if (!items && genAI) {
-                        console.log("Falling back to direct Gemini API for receipt scanning...");
-                        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                        const prompt = RECEIPT_VISION_PROMPT;
-                        const imageParts = [{ inlineData: { data: buffer.toString('base64'), mimeType: mimetype } }];
-                        const result = await model.generateContent([prompt, ...imageParts]);
-                        const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                        console.log("[Vision Gemini Response]:", responseText);
-                        const parsed = processParsedItems(JSON.parse(result.response.text().trim().replace(/```json/g, '').replace(/```/g, '')));
-                        items = parsed.items;
-                        detectedGrandTotal = parsed.grandTotal;
-                        detectedTaxCharges = parsed.taxCharges;
-                        console.log("[Processed Items Gemini]:", JSON.stringify(items));
-                    }
-                }
-
-                if (!items) {
-                    throw new Error("Failed to parse receipt from image using OpenRouter and Gemini.");
+                if (!items || items.length === 0) {
+                    throw new Error("Failed to parse receipt from image using Gemini/OpenRouter.");
                 }
             } else {
                 // Text receipt input
@@ -1169,13 +1170,28 @@ async function handleSplitBill(msg, userName, from, text) {
 
                     if (!items && genAI) {
                         console.log("Falling back to direct Gemini API for text items parsing...");
-                        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                        const result = await model.generateContent(prompt);
-                        const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                        const parsed = processParsedItems(JSON.parse(responseText));
-                        items = parsed.items;
-                        detectedGrandTotal = parsed.grandTotal;
-                        detectedTaxCharges = parsed.taxCharges;
+                        const geminiModels = Array.from(new Set([
+                            process.env.GEMINI_MODEL,
+                            "gemini-3.8-flash",
+                            "gemini-3.5-flash",
+                            "gemini-2.5-flash"
+                        ].filter(Boolean)));
+                        for (const modelName of geminiModels) {
+                            try {
+                                const model = genAI.getGenerativeModel({ model: modelName });
+                                const result = await model.generateContent(prompt);
+                                const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
+                                const parsed = processParsedItems(JSON.parse(responseText));
+                                if (parsed && parsed.items && parsed.items.length > 0) {
+                                    items = parsed.items;
+                                    detectedGrandTotal = parsed.grandTotal;
+                                    detectedTaxCharges = parsed.taxCharges;
+                                    break;
+                                }
+                            } catch (e) {
+                                console.warn(`Gemini text items parsing failed with ${modelName}:`, e.message);
+                            }
+                        }
                     }
 
                     if (!items) {
@@ -2611,7 +2627,7 @@ async function startWhatsAppBot() {
                     return;
                 }
 
-                await reply(msg, "Reading receipt with Google Cloud Vision OCR... 🤖 Please wait a moment.");
+                await reply(msg, "Reading receipt with AI... 🤖 Please wait a moment.");
 
                 // 1. Download image
                 const targetMessage = msg.message?.imageMessage ? msg : { message: msg.message.extendedTextMessage.contextInfo.quotedMessage };
@@ -2628,126 +2644,8 @@ async function startWhatsAppBot() {
                     return;
                 }
 
-                // 2. OCR using Google Cloud Vision
-                let ocrText = '';
-                try {
-                    const [visionResult] = await visionClient.textDetection({ image: { content: buffer } });
-                    ocrText = visionResult.fullTextAnnotation?.text || visionResult.textAnnotations?.[0]?.description || '';
-                } catch (ocrErr) {
-                    console.error("Google Cloud Vision OCR failed:", ocrErr);
-                }
-
-                let items = null;
-
-                // 3. Fallback to direct vision-based LLM if OCR failed or returned nothing
-                if (!ocrText) {
-                    console.log("No OCR text or Vision API failed. Falling back to direct LLM Vision...");
-                    const openRouterKey = process.env.OPENROUTER_API_KEY;
-                    if (openRouterKey) {
-                        const modelsToTry = [
-                            "meta-llama/llama-3.2-11b-vision-instruct:free",
-                            "qwen/qwen-2-vl-7b-instruct:free",
-                            "nvidia/nemotron-nano-12b-v2-vl:free",
-                            "google/gemma-4-31b-it:free",
-                            "openrouter/free"
-                        ];
-                        for (const modelName of modelsToTry) {
-                            try {
-                                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                                    method: "POST",
-                                    headers: {
-                                        "Authorization": `Bearer ${openRouterKey}`,
-                                        "Content-Type": "application/json",
-                                        "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
-                                    },
-                                    body: JSON.stringify({
-                                        model: modelName,
-                                        messages: [{
-                                            role: "user",
-                                            content: [
-                                                { type: "text", text: RECEIPT_VISION_PROMPT },
-                                                { type: "image_url", image_url: { url: `data:${mimetype};base64,${buffer.toString('base64')}` } }
-                                            ]
-                                        }]
-                                    })
-                                });
-                                if (response.ok) {
-                                    const data = await response.json();
-                                    const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                                    items = processParsedItems(JSON.parse(responseText)).items;
-                                    break;
-                                }
-                            } catch (e) {
-                                console.warn(`Fallback OpenRouter model ${modelName} failed:`, e.message);
-                            }
-                        }
-                    }
-
-                    if (!items && genAI) {
-                        try {
-                            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                            const prompt = RECEIPT_VISION_PROMPT;
-                            const imageParts = [{ inlineData: { data: buffer.toString('base64'), mimeType: mimetype } }];
-                            const result = await model.generateContent([prompt, ...imageParts]);
-                            const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                            items = processParsedItems(JSON.parse(responseText)).items;
-                        } catch (e) {
-                            console.error("Fallback Gemini direct vision failed:", e.message);
-                        }
-                    }
-                } else {
-                    // We have OCR text! Convert OCR text to JSON using LLM
-                    const promptText = RECEIPT_OCR_PROMPT_PREFIX + ocrText;
-
-                    const openRouterKey = process.env.OPENROUTER_API_KEY;
-                    if (openRouterKey) {
-                        const modelsToTry = [
-                            "meta-llama/llama-3.3-70b-instruct:free",
-                            "google/gemma-4-31b-it:free",
-                            "nex-agi/nex-n2-pro:free",
-                            "openrouter/free"
-                        ];
-                        for (const modelName of modelsToTry) {
-                            try {
-                                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                                    method: "POST",
-                                    headers: {
-                                        "Authorization": `Bearer ${openRouterKey}`,
-                                        "Content-Type": "application/json",
-                                        "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
-                                    },
-                                    body: JSON.stringify({
-                                        model: modelName,
-                                        messages: [{ role: "user", content: promptText }]
-                                    })
-                                });
-                                if (response.ok) {
-                                    const data = await response.json();
-                                    const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
-                                    items = processParsedItems(JSON.parse(responseText)).items;
-                                    break;
-                                }
-                            } catch (e) {
-                                console.warn(`OpenRouter OCR parsing failed with ${modelName}:`, e.message);
-                            }
-                        }
-                    }
-
-                    if (!items && genAI) {
-                        try {
-                            const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-                            const result = await model.generateContent(promptText);
-                            const responseText = result.response.text().trim().replace(/```json/g, '').replace(/```/g, '');
-                            items = processParsedItems(JSON.parse(responseText)).items;
-                        } catch (e) {
-                            console.error("Gemini OCR parsing failed:", e.message);
-                        }
-                    }
-                }
-
-                if (items) {
-                    items = processParsedItems(items).items;
-                }
+                const parsedResult = await parseReceiptFromImage(buffer, mimetype);
+                const items = parsedResult.items;
 
                 if (!items || items.length === 0) {
                     await reply(msg, "❌ Sorry, I could not parse any items from the receipt. Please try again or log manually.");
