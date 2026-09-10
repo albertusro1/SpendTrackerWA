@@ -488,7 +488,22 @@ function processParsedItems(parsed) {
     return { items, grandTotal: gTotal, taxCharges };
 }
 
+function isAccountOrQuotaError(err) {
+    const msg = (err?.message || '').toLowerCase();
+    return msg.includes('429') || 
+           msg.includes('prepayment') || 
+           msg.includes('depleted') || 
+           msg.includes('quota') || 
+           msg.includes('resource_exhausted') || 
+           msg.includes('401') || 
+           msg.includes('403') || 
+           msg.includes('api_key') || 
+           msg.includes('unauthorized');
+}
+
 async function parseReceiptFromImage(buffer, mimetype) {
+    let geminiAuthError = null;
+
     // 1. PRIMARY FAST PATH: Direct Gemini Vision API (~1-2 seconds)
     if (genAI) {
         const geminiModels = Array.from(new Set([
@@ -513,6 +528,11 @@ async function parseReceiptFromImage(buffer, mimetype) {
                 }
             } catch (e) {
                 console.warn(`[Fast Vision] Direct Gemini Vision failed with ${modelName}:`, e.message);
+                if (isAccountOrQuotaError(e)) {
+                    geminiAuthError = e.message;
+                    console.warn(`[Fast Vision] Account-level / Quota error detected (${e.message}). Halting further Gemini retries.`);
+                    break;
+                }
             }
         }
     } else {
@@ -534,8 +554,8 @@ async function parseReceiptFromImage(buffer, mimetype) {
         console.log("OCR text extracted successfully. Parsing text via LLM...");
         const promptText = RECEIPT_OCR_PROMPT_PREFIX + ocrText;
 
-        // Try Gemini on OCR text first if genAI is available
-        if (genAI) {
+        // Try Gemini on OCR text only if no prior quota/auth error
+        if (genAI && !geminiAuthError) {
             const geminiModels = Array.from(new Set([
                 process.env.GEMINI_MODEL,
                 "gemini-3.8-flash",
@@ -554,20 +574,27 @@ async function parseReceiptFromImage(buffer, mimetype) {
                     }
                 } catch (err) {
                     console.warn(`Gemini OCR text parsing failed with ${modelName}:`, err.message);
+                    if (isAccountOrQuotaError(err)) {
+                        geminiAuthError = err.message;
+                        break;
+                    }
                 }
             }
         }
 
-        // Try OpenRouter on OCR text
+        // Try OpenRouter on OCR text with a strict 6-second timeout
         if (openRouterKey) {
             const modelsToTry = [
                 "meta-llama/llama-3.3-70b-instruct:free",
-                "google/gemma-4-31b-it:free",
-                "openrouter/free"
+                "google/gemma-4-31b-it:free"
             ];
             for (const modelName of modelsToTry) {
+                let timeoutId;
                 try {
-                    console.log(`Trying OpenRouter model for OCR text parsing: ${modelName}`);
+                    console.log(`Trying OpenRouter model for OCR text parsing (max 6s): ${modelName}`);
+                    const controller = new AbortController();
+                    timeoutId = setTimeout(() => controller.abort(), 6000);
+
                     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
                         method: "POST",
                         headers: {
@@ -575,11 +602,14 @@ async function parseReceiptFromImage(buffer, mimetype) {
                             "Content-Type": "application/json",
                             "HTTP-Referer": "https://github.com/albertusro1/SpendTrackerWA",
                         },
+                        signal: controller.signal,
                         body: JSON.stringify({
                             model: modelName,
                             messages: [{ role: "user", content: promptText }]
                         })
                     });
+                    clearTimeout(timeoutId);
+
                     if (response.ok) {
                         const data = await response.json();
                         const responseText = data.choices[0].message.content.trim().replace(/```json/g, '').replace(/```/g, '');
@@ -590,25 +620,25 @@ async function parseReceiptFromImage(buffer, mimetype) {
                         }
                     }
                 } catch (e) {
-                    console.warn(`OpenRouter OCR parsing failed with ${modelName}:`, e.message);
+                    if (timeoutId) clearTimeout(timeoutId);
+                    console.warn(`OpenRouter OCR parsing failed or timed out with ${modelName}:`, e.message);
                 }
             }
         }
     }
 
-    // 3. TERTIARY FALLBACK: OpenRouter Vision
-    if (openRouterKey) {
+    // 3. TERTIARY FALLBACK: OpenRouter Vision with a strict 6-second timeout
+    if (openRouterKey && !ocrText) {
         const modelsToTry = [
             "meta-llama/llama-3.2-11b-vision-instruct:free",
-            "qwen/qwen-2-vl-7b-instruct:free",
-            "openrouter/free"
+            "qwen/qwen-2-vl-7b-instruct:free"
         ];
         for (const modelName of modelsToTry) {
             let timeoutId;
             try {
-                console.log(`Trying OpenRouter Vision model: ${modelName}`);
+                console.log(`Trying OpenRouter Vision model (max 6s): ${modelName}`);
                 const controller = new AbortController();
-                timeoutId = setTimeout(() => controller.abort(), 15000);
+                timeoutId = setTimeout(() => controller.abort(), 6000);
 
                 const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
                     method: "POST",
@@ -646,6 +676,10 @@ async function parseReceiptFromImage(buffer, mimetype) {
                 console.warn(`Failed with OpenRouter vision model ${modelName}:`, err.message);
             }
         }
+    }
+
+    if (geminiAuthError) {
+        throw new Error(`GEMINI_QUOTA_ERROR: ${geminiAuthError}`);
     }
 
     return { items: null, grandTotal: null, taxCharges: [] };
@@ -1482,7 +1516,11 @@ async function handleSplitBill(msg, userName, from, text) {
         }
     } catch (e) {
         console.error("Gemini/SplitBill Error:", e);
-        await reply(msg, "Sorry, I couldn't process the request. Please type 'cancel' to exit, or try again.");
+        if (e.message && (e.message.includes("GEMINI_QUOTA_ERROR") || e.message.includes("depleted") || e.message.includes("Too Many Requests") || e.message.includes("429"))) {
+            await reply(msg, "⚠️ *Gemini API Quota/Credits Depleted!*\n\nYour Gemini API credits or quota are exhausted (429). Please update `GEMINI_API_KEY` in `.env` with a free key from https://aistudio.google.com/app/apikey.");
+        } else {
+            await reply(msg, "Sorry, I couldn't process the request: " + (e.message || "Unknown error") + "\nPlease type 'cancel' to exit, or try again.");
+        }
     }
 }
 
@@ -2644,8 +2682,19 @@ async function startWhatsAppBot() {
                     return;
                 }
 
-                const parsedResult = await parseReceiptFromImage(buffer, mimetype);
-                const items = parsedResult.items;
+                let parsedResult;
+                try {
+                    parsedResult = await parseReceiptFromImage(buffer, mimetype);
+                } catch (err) {
+                    console.error("Scan parsing error:", err);
+                    if (err.message && (err.message.includes("GEMINI_QUOTA_ERROR") || err.message.includes("depleted") || err.message.includes("Too Many Requests") || err.message.includes("429"))) {
+                        await reply(msg, "⚠️ *Gemini API Quota/Credits Depleted!*\n\nYour Gemini API credits or quota are exhausted (429). Please update `GEMINI_API_KEY` in `.env` with a free key from https://aistudio.google.com/app/apikey.");
+                        return;
+                    }
+                    await reply(msg, "❌ Failed to parse receipt: " + err.message);
+                    return;
+                }
+                const items = parsedResult?.items;
 
                 if (!items || items.length === 0) {
                     await reply(msg, "❌ Sorry, I could not parse any items from the receipt. Please try again or log manually.");
