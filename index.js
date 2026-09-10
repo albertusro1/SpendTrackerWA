@@ -494,8 +494,8 @@ async function parseReceiptFromImage(buffer, mimetype) {
         const geminiModels = Array.from(new Set([
             process.env.GEMINI_MODEL,
             "gemini-3.8-flash",
-            "gemini-3.5-flash",
-            "gemini-2.5-flash"
+            "gemini-3.6-flash",
+            "gemini-3.5-flash"
         ].filter(Boolean)));
 
         for (const modelName of geminiModels) {
@@ -539,8 +539,8 @@ async function parseReceiptFromImage(buffer, mimetype) {
             const geminiModels = Array.from(new Set([
                 process.env.GEMINI_MODEL,
                 "gemini-3.8-flash",
-                "gemini-3.5-flash",
-                "gemini-2.5-flash"
+                "gemini-3.6-flash",
+                "gemini-3.5-flash"
             ].filter(Boolean)));
             for (const modelName of geminiModels) {
                 try {
@@ -1173,8 +1173,8 @@ async function handleSplitBill(msg, userName, from, text) {
                         const geminiModels = Array.from(new Set([
                             process.env.GEMINI_MODEL,
                             "gemini-3.8-flash",
-                            "gemini-3.5-flash",
-                            "gemini-2.5-flash"
+                            "gemini-3.6-flash",
+                            "gemini-3.5-flash"
                         ].filter(Boolean)));
                         for (const modelName of geminiModels) {
                             try {
