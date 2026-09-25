@@ -828,6 +828,49 @@ async function calculateSplitBill(msg, session, userName, from) {
     const grandTotal = session.receipts.reduce((sum, r) => sum + r.items.reduce((s, i) => s + i.price, 0), 0);
     report += `*Grand Total:* Rp ${grandTotal.toLocaleString('id-ID')}\n━━━━━━━━━━━━━━━━━━━━\n\n`;
     
+    // Detailed Expense Breakdown per Person
+    const personBreakdown = {};
+    allParticipants.forEach(p => {
+        personBreakdown[p] = [];
+    });
+
+    session.receipts.forEach((r, rIdx) => {
+        r.items.forEach(item => {
+            if (!item.owners || item.owners.length === 0) return;
+            const perPersonShare = Math.round(item.price / item.owners.length);
+            const isShared = item.owners.length > 1;
+            const billPrefix = session.receipts.length > 1 ? `[Bill ${rIdx + 1}] ` : '';
+            
+            item.owners.forEach(o => {
+                if (!personBreakdown[o]) personBreakdown[o] = [];
+                let desc = `${billPrefix}${item.name}: Rp ${perPersonShare.toLocaleString('id-ID')}`;
+                if (isShared) {
+                    desc += ` (1/${item.owners.length} share)`;
+                }
+                personBreakdown[o].push(desc);
+            });
+        });
+    });
+
+    report += `👥 *Individual Expense Breakdown:*\n\n`;
+    for (const p of allParticipants) {
+        const items = personBreakdown[p] || [];
+        const totalFormatted = Math.round(consumptions[p] || 0).toLocaleString('id-ID');
+        report += `• *${p}* — *Total: Rp ${totalFormatted}*\n`;
+        if (items.length > 0) {
+            items.forEach(itemStr => {
+                report += `  - ${itemStr}\n`;
+            });
+        } else {
+            report += `  - _(No items assigned)_\n`;
+        }
+        if (payments[p] && payments[p] > 0) {
+            report += `  _(Paid: Rp ${Math.round(payments[p]).toLocaleString('id-ID')})_\n`;
+        }
+        report += `\n`;
+    }
+    report += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+
     report += `*Settlements (Who owes who):*\n`;
     if (settlements.length === 0) {
         report += `✅ Everyone is even! No transactions needed.`;
