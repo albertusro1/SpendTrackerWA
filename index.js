@@ -439,20 +439,31 @@ function isMetadataItem(name) {
     const n = name.toLowerCase().trim();
     // Skip modifier/note lines starting with # or *
     if (n.startsWith('#') || n.startsWith('*')) return true;
-    const blacklist = [
-        'subtotal', 'sub total',
-        'grand total', 'grandtotal',
-        'total food', 'total beverage', 'total minuman', 'total makanan',
-        'total',
-        'service charge', 'service chg', 'servicefee', 'service fee', 'service', 'charge', 'fee',
-        'ta charge', 'take away', 'takeaway', 'packaging', 'packing',
-        'tax', 'pjk', 'pkj', 'pajak', 'ppn', 'pb1', 'vat', 'resto', 'gst',
-        'pembulatan', 'rounding', 'pembulan', 'pembulat',
-        'edc', 'bca', 'mandiri', 'bri', 'bni', 'cimb', 'visa', 'mastercard', 'qris',
-        'non tunai', 'nontunai', 'tunai', 'cash', 'kembali', 'change', 'payment', 'credit card', 'debit',
-        'customer', 'dine in', 'dinein', 'dine-in', 'table', 'kasir', 'cashier', 'waiter', 'menu request', 'jam masuk', 'no. meja', 'mode'
+
+    // Exact or prefix matches for totals
+    if (/^(total|subtotal|sub\s*total|grand\s*total)(\s*[:\d].*)?$/i.test(n)) return true;
+    if (/^(total\s*(food|beverage|minuman|makanan|bayar|tagihan|transaksi|order|items?))(\s*[:\d].*)?$/i.test(n)) return true;
+
+    // Word boundary patterns to prevent substring bugs (e.g. coffee matching fee, vegetable matching table, cashew matching cash, brioche/brisket matching bri)
+    const patterns = [
+        /\b(subtotal|sub\s*total|grand\s*total)\b/i,
+        /\b(service\s*charge|service\s*fee|service\s*chg|biaya\s*layanan|biaya\s*pelayanan)\b/i,
+        /\b(delivery\s*fee|admin\s*fee|packing\s*fee|ta\s*charge|packaging\s*fee|biaya\s*kemasan)\b/i,
+        /\b(tax|pajak|ppn|pb1|pph|pjk|pkj|vat|gst)\b/i,
+        /\b(pembulatan|rounding|pembulan|pembulat)\b/i,
+        /\b(edc|qris|nontunai|non\s*tunai)\b/i,
+        /\b(bca|mandiri|bri|bni|cimb|visa|mastercard)\b/i,
+        /\b(kembali|change|kembalian)\b/i,
+        /\b(credit\s*card|debit\s*card|debit)\b/i,
+        /\b(dine\s*in|dinein|take\s*away|takeaway)\b/i,
+        /\b(customer|pelanggan)\b/i,
+        /\b(table|meja|no\.?\s*meja)\b/i,
+        /\b(cashier|kasir|waiter)\b/i,
+        /\b(menu\s*request|jam\s*masuk)\b/i,
+        /^(\s*tax\s*|\s*fee\s*|\s*charge\s*|\s*cash\s*|\s*tunai\s*)$/i
     ];
-    return blacklist.some(term => n.includes(term));
+
+    return patterns.some(p => p.test(n));
 }
 
 function processParsedItems(parsed) {
@@ -509,8 +520,11 @@ async function parseReceiptFromImage(buffer, mimetype) {
         const geminiModels = Array.from(new Set([
             process.env.GEMINI_MODEL,
             "gemini-3.6-flash",
+            "gemini-3.7-flash",
+            "gemini-flash-latest",
             "gemini-3.8-flash",
-            "gemini-3.5-flash"
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite"
         ].filter(Boolean)));
 
         for (const modelName of geminiModels) {
@@ -559,8 +573,11 @@ async function parseReceiptFromImage(buffer, mimetype) {
             const geminiModels = Array.from(new Set([
                 process.env.GEMINI_MODEL,
                 "gemini-3.6-flash",
+                "gemini-3.7-flash",
+                "gemini-flash-latest",
                 "gemini-3.8-flash",
-                "gemini-3.5-flash"
+                "gemini-3.5-flash",
+                "gemini-3.5-flash-lite"
             ].filter(Boolean)));
             for (const modelName of geminiModels) {
                 try {
@@ -1250,8 +1267,11 @@ async function handleSplitBill(msg, userName, from, text) {
                         const geminiModels = Array.from(new Set([
                             process.env.GEMINI_MODEL,
                             "gemini-3.6-flash",
+                            "gemini-3.7-flash",
+                            "gemini-flash-latest",
                             "gemini-3.8-flash",
-                            "gemini-3.5-flash"
+                            "gemini-3.5-flash",
+                            "gemini-3.5-flash-lite"
                         ].filter(Boolean)));
                         for (const modelName of geminiModels) {
                             try {
@@ -1310,19 +1330,27 @@ async function handleSplitBill(msg, userName, from, text) {
             let autoTaxAmt = 0;
             let autoTaxSource = null;
 
-            // Layer 1: grand_total difference
-            if (detectedGrandTotal && detectedGrandTotal > itemsSum) {
-                autoTaxAmt = detectedGrandTotal - itemsSum;
-                autoTaxSource = 'grand_total';
-                console.log(`[Auto-Tax] Grand total ${detectedGrandTotal} - items sum ${itemsSum} = tax ${autoTaxAmt}`);
-            }
-            // Layer 2: tax_charges sum
-            else if (detectedTaxCharges && detectedTaxCharges.length > 0) {
+            // Layer 1: Explicit tax lines extracted from receipt (highest confidence)
+            if (detectedTaxCharges && detectedTaxCharges.length > 0) {
                 autoTaxAmt = detectedTaxCharges.reduce((s, tc) => s + tc.amount, 0);
                 if (autoTaxAmt > 0) {
                     autoTaxSource = 'tax_charges';
                     const taxNames = detectedTaxCharges.map(tc => `${tc.name}: Rp ${tc.amount.toLocaleString('id-ID')}`).join(', ');
                     console.log(`[Auto-Tax] Detected tax lines: ${taxNames}, total tax: ${autoTaxAmt}`);
+                }
+            }
+            // Layer 2: Grand total difference (implied tax/service charge)
+            // Safety check: Only treat difference as tax if difference is <= 28% of items sum.
+            // If the difference is > 28% without explicit tax lines, it is likely a missed/dropped item, not tax.
+            if (autoTaxAmt === 0 && detectedGrandTotal && detectedGrandTotal > itemsSum) {
+                const diff = detectedGrandTotal - itemsSum;
+                const diffRatio = diff / itemsSum;
+                if (diffRatio <= 0.28) {
+                    autoTaxAmt = diff;
+                    autoTaxSource = 'grand_total';
+                    console.log(`[Auto-Tax] Grand total ${detectedGrandTotal} - items sum ${itemsSum} = tax ${autoTaxAmt} (${Math.round(diffRatio * 100)}%)`);
+                } else {
+                    console.warn(`[Auto-Tax] Grand total diff ${diff} (${Math.round(diffRatio * 100)}%) exceeds 28% with no explicit tax lines. Likely missed items, skipping auto-tax.`);
                 }
             }
 
